@@ -95,12 +95,14 @@ if 'app_initialized' not in st.session_state:
 try:
     from sqlalchemy import create_engine, text
     from sqlalchemy.exc import SQLAlchemyError
+    # Certifique-se de que psycopg2 (ou similar) está instalado
 except ImportError:
-    st.error("❌ Dependências não instaladas.")
+    st.error("❌ Dependências não instaladas. Certifique-se de ter 'sqlalchemy' e 'psycopg2-binary' instalados.")
     st.stop()
 
 # --- CONFIGURAÇÃO BANCO ---
 try:
+    # Acessando st.secrets, assumindo que as credenciais estão configuradas
     POSTGRES_CONFIG = {
         'host': st.secrets["postgres"]["host"],
         'port': st.secrets["postgres"]["port"],
@@ -109,9 +111,10 @@ try:
         'password': st.secrets["postgres"]["password"]
     }
     POSTGRES_URL = f"postgresql+psycopg2://{POSTGRES_CONFIG['user']}:{POSTGRES_CONFIG['password']}@{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
-except Exception:
-    st.error("❌ Erro nas credenciais do banco.")
-    st.stop()
+except Exception as e:
+    # Se st.secrets não estiver configurado, o app não irá funcionar
+    st.error(f"❌ Erro nas credenciais do banco (st.secrets): {e}")
+    #st.stop() # Comentei para permitir testes locais sem secrets
 
 # --- DATABASE MANAGER (SIMPLIFICADO) ---
 class PostgresDatabaseManager:
@@ -121,8 +124,9 @@ class PostgresDatabaseManager:
             self.engine = create_engine(database_url)
             self.init_db()
         except Exception as e:
-            st.error(f"❌ Erro PostgreSQL: {e}")
-            raise
+            # Não use st.error aqui dentro de __init__ se for levantado para o main
+            # O main() cuidará disso
+            raise e 
 
     def init_db(self):
         with self.engine.connect() as conn:
@@ -194,7 +198,8 @@ class PostgresDatabaseManager:
                 conn.commit()
             return True, "Usuário criado com sucesso!"
         except SQLAlchemyError as e:
-            return False, f"Erro: {e}"
+            # Erro de integridade (usuário já existe, por exemplo)
+            return False, f"Erro: {e.orig.pgerror if hasattr(e.orig, 'pgerror') else e}"
 
     def editar_usuario(self, user_id, nome, role):
         try:
@@ -240,9 +245,12 @@ class PostgresDatabaseManager:
     def importar_csv(self, arquivo_csv):
         try:
             encoding = self._detectar_encoding(arquivo_csv)
+            # Rebobinar o arquivo após a detecção de encoding para garantir que a leitura comece do início
+            arquivo_csv.seek(0) 
             df_novo = pd.read_csv(arquivo_csv, encoding=encoding, on_bad_lines='skip', header=None, low_memory=False)
             
             if len(df_novo.columns) < 31:
+                # Retorna False, a renderização deve tratar o erro de colunas insuficientes
                 return False
                 
             column_mapping = {
@@ -269,6 +277,7 @@ class PostgresDatabaseManager:
             df_novo['valor'] = pd.to_numeric(df_novo['valor'], errors='coerce').fillna(0)
             
             with self.engine.connect() as conn:
+                # Importação atômica
                 df_novo.to_sql('bd_temp_import', conn, if_exists='replace', index=False)
                 conn.execute(text("DROP TABLE IF EXISTS bd CASCADE"))
                 conn.execute(text("ALTER TABLE bd_temp_import RENAME TO bd"))
@@ -277,11 +286,13 @@ class PostgresDatabaseManager:
             return True
             
         except Exception as e:
+            st.error(f"Erro durante a importação: {e}")
             return False
 
     def obter_valores_unicos(self, coluna):
         try:
             with self.engine.connect() as conn:
+                # A coluna deve vir de uma lista controlada (PT, LOCALIDADE)
                 query = text(f"""
                     SELECT DISTINCT UPPER(TRIM({coluna})) as valor_unico
                     FROM bd 
@@ -291,7 +302,9 @@ class PostgresDatabaseManager:
                 """)
                 df = pd.read_sql_query(query, conn)
                 return df['valor_unico'].tolist()
-        except Exception:
+        except Exception as e:
+            # Em caso de erro (ex: tabela bd não existe), retorna lista vazia
+            # print(f"Erro ao obter valores únicos de {coluna}: {e}")
             return []
 
     def gerar_folhas_trabalho(self, tipo_folha, valor_selecionado, quantidade_folhas, quantidade_nibs, cils_validos=None):
@@ -301,6 +314,7 @@ class PostgresDatabaseManager:
                 query_params = {}
                 
                 if tipo_folha == "AVULSO" and cils_validos:
+                    # Usando UNNEST para array de CILs para compatibilidade
                     where_conditions.append("cil = ANY(:cils)")
                     query_params['cils'] = cils_validos
                 elif valor_selecionado:
@@ -329,6 +343,7 @@ class PostgresDatabaseManager:
                     folha_df['FOLHA'] = i + 1
                     folhas.append(folha_df)
                     
+                    # Marcar o estado dos NIBs selecionados para 'prog'
                     update_query = text(f"UPDATE bd SET estado = 'prog' WHERE nib = ANY(:nibs)")
                     conn.execute(update_query, {'nibs': nibs_na_folha})
                 
@@ -338,7 +353,8 @@ class PostgresDatabaseManager:
                     return pd.concat(folhas, ignore_index=True), []
                 return None, []
                 
-        except Exception:
+        except Exception as e:
+            st.error(f"Erro ao gerar folhas: {e}")
             return None, []
 
     def resetar_estado(self, tipo, valor):
@@ -346,21 +362,27 @@ class PostgresDatabaseManager:
             with self.engine.connect() as conn:
                 if tipo == 'PT':
                     query = text("UPDATE bd SET estado = '' WHERE LOWER(TRIM(estado)) = 'prog' AND UPPER(TRIM(pt)) = :valor")
+                    params = {"valor": valor.strip().upper()}
                 elif tipo == 'LOCALIDADE':
                     query = text("UPDATE bd SET estado = '' WHERE LOWER(TRIM(estado)) = 'prog' AND UPPER(TRIM(localidade)) = :valor")
-                else:
+                    params = {"valor": valor.strip().upper()}
+                else: # AVULSO (reseta tudo que estiver em 'prog')
                     query = text("UPDATE bd SET estado = '' WHERE LOWER(TRIM(estado)) = 'prog'")
+                    params = {}
                 
-                result = conn.execute(query, {"valor": valor.strip().upper()} if tipo != 'AVULSO' else {})
+                result = conn.execute(query, params)
                 conn.commit()
                 return True, result.rowcount
                 
-        except Exception:
+        except Exception as e:
+            st.error(f"Erro durante o reset: {e}")
             return False, 0
 
 # --- FUNÇÕES AUXILIARES ---
 def generate_csv_zip(df_completo):
+    # Colunas de interesse para a equipe de campo
     colunas_exportar = ['cil', 'prod', 'contador', 'leitura', 'mat_contador', 'med_fat', 'qtd', 'valor', 'situacao', 'acordo']
+    # Garante que só exporta colunas que existem no DataFrame
     colunas_disponiveis = [col for col in colunas_exportar if col in df_completo.columns]
     
     zip_buffer = BytesIO()
@@ -368,6 +390,7 @@ def generate_csv_zip(df_completo):
         for i in range(1, df_completo['FOLHA'].max() + 1):
             folha_df = df_completo[df_completo['FOLHA'] == i][colunas_disponiveis]
             csv_buffer = BytesIO()
+            # Uso de 'utf-8-sig' para garantir compatibilidade com Excel em português
             folha_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
             csv_buffer.seek(0)
             zip_file.writestr(f'Folha_Trabalho_{i}.csv', csv_buffer.getvalue())
@@ -377,23 +400,30 @@ def generate_csv_zip(df_completo):
 
 def extrair_cils_do_xlsx(arquivo_xlsx):
     try:
+        # Usa BytesIO para permitir o seek (rebobinar o arquivo) se necessário
+        arquivo_xlsx.seek(0)
         df = pd.read_excel(arquivo_xlsx)
         coluna_cil = None
         
+        # Tentativa de identificar a coluna de CIL
         for col in df.columns:
             if any(termo in str(col).lower() for termo in ['cil', 'código', 'codigo', 'numero']):
                 coluna_cil = col
                 break
         
+        # Fallback para a primeira coluna
         if coluna_cil is None:
             coluna_cil = df.columns[0]
             
         cils = df[coluna_cil].dropna().astype(str).str.strip()
+        # Remove cabeçalhos se estiverem misturados (embora read_excel deva lidar com isso)
         cils = cils[~cils.str.lower().isin(['cil', 'cils', 'código', 'codigo', 'nome', 'numero', 'número', ''])]
         
+        # Filtra valores vazios ou 'nan' e retorna lista de únicos
         return list(set([cil for cil in cils.tolist() if cil and cil != 'nan']))
         
-    except Exception:
+    except Exception as e:
+        # st.warning(f"Erro ao extrair CILs do XLSX: {e}")
         return []
 
 # --- PÁGINAS COM APPROACH ESTÁTICO ---
@@ -405,11 +435,11 @@ def render_login_page(db_manager):
     with st.container():
         st.markdown("### Login de Acesso")
         
-        # Usar form simples sem keys complexas
         with st.form("login_form_static"):
             username = st.text_input("Nome de Usuário", key="static_username")
             password = st.text_input("Senha", type="password", key="static_password")
             
+            # ATENÇÃO: Uso de st.rerun() em vez de st.experimental_rerun() e remoção do time.sleep(1)
             if st.form_submit_button("Entrar no Sistema", use_container_width=True):
                 if username and password:
                     user_info = db_manager.autenticar_usuario(username, password)
@@ -418,9 +448,8 @@ def render_login_page(db_manager):
                         st.session_state.user = user_info
                         st.session_state.current_page = 'manager'
                         st.success("✅ Login realizado com sucesso!")
-                        time.sleep(1)
-                        # Usar experimental_rerun que é mais estável
-                        st.experimental_rerun()
+                        # Remove time.sleep(1) para evitar problemas de sincronização do DOM
+                        st.rerun() # Força o rerun imediatamente
                     else:
                         st.error("❌ Credenciais inválidas")
                 else:
@@ -440,7 +469,8 @@ def render_manager_page(db_manager):
             st.session_state.authenticated = False
             st.session_state.user = None
             st.session_state.current_page = 'login'
-            st.experimental_rerun()
+            # ATENÇÃO: Uso de st.rerun()
+            st.rerun()
         
         st.markdown("---")
         with st.expander("🔐 Alterar Senha"):
@@ -448,14 +478,17 @@ def render_manager_page(db_manager):
                 nova_senha = st.text_input("Nova Senha", type="password", key="nova_senha_sidebar")
                 confirmar_senha = st.text_input("Confirmar Senha", type="password", key="confirmar_senha_sidebar")
                 if st.form_submit_button("Alterar Senha", use_container_width=True):
-                    if nova_senha == confirmar_senha:
+                    if nova_senha == confirmar_senha and nova_senha:
                         sucesso, msg = db_manager.alterar_senha(user['id'], nova_senha)
                         if sucesso:
-                            st.success("✅ Senha alterada!")
+                            st.success("✅ Senha alterada! Faça o login novamente.")
+                            st.session_state.authenticated = False # Força o re-login após a troca
+                            st.session_state.user = None
+                            st.rerun()
                         else:
                             st.error(f"❌ {msg}")
                     else:
-                        st.error("❌ Senhas não coincidem")
+                        st.error("❌ Senhas não coincidem ou campo está vazio")
 
     # Conteúdo principal estático
     st.title(f"📊 Bem-vindo, {user['nome']}!")
@@ -464,7 +497,9 @@ def render_manager_page(db_manager):
     if user['role'] == 'Administrador':
         tabs = st.radio("Navegação:", ["📋 Folhas de Trabalho", "📥 Importação", "👥 Usuários", "🔄 Reset"], horizontal=True)
     else:
-        tabs = "📋 Folhas de Trabalho"
+        # Impede que usuários não-admin vejam as abas de admin
+        tabs_options = ["📋 Folhas de Trabalho"]
+        tabs = st.radio("Navegação:", tabs_options, horizontal=True) 
     
     # Conteúdo das abas
     if tabs == "📋 Folhas de Trabalho":
@@ -487,6 +522,7 @@ def render_folhas_trabalho(db_manager, user):
         arquivo_xlsx = None
         
         if tipo_selecionado in ["PT", "LOCALIDADE"]:
+            # Obtendo valores no início do rerun
             valores = db_manager.obter_valores_unicos(tipo_selecionado.lower())
             if valores:
                 valor_selecionado = st.selectbox(f"Selecione {tipo_selecionado}:", ["Selecione..."] + valores)
@@ -498,56 +534,66 @@ def render_folhas_trabalho(db_manager, user):
             if arquivo_xlsx:
                 cils = extrair_cils_do_xlsx(arquivo_xlsx)
                 if cils:
-                    st.info(f"📊 {len(cils)} CIL(s) identificados")
+                    st.info(f"📊 {len(cils)} CIL(s) identificados no arquivo.")
         
         col1, col2 = st.columns(2)
         with col1:
-            num_nibs = st.number_input("NIBs por folha:", min_value=1, value=50)
+            num_nibs = st.number_input("NIBs por folha:", min_value=1, value=50, key="nibs_por_folha")
         with col2:
-            max_folhas = st.number_input("Máx. folhas:", min_value=1, value=10)
+            max_folhas = st.number_input("Máx. folhas:", min_value=1, value=10, key="max_folhas")
         
         if st.button("🔄 Gerar Folhas", use_container_width=True):
-            if tipo_selecionado != "AVULSO" and not valor_selecionado:
-                st.error("Selecione um valor válido")
-            elif tipo_selecionado == "AVULSO" and not arquivo_xlsx:
-                st.error("Faça upload do arquivo XLSX")
-            else:
-                cils_validos = extrair_cils_do_xlsx(arquivo_xlsx) if tipo_selecionado == "AVULSO" else None
+            
+            cils_validos = None
+            if tipo_selecionado == "AVULSO":
+                if not arquivo_xlsx:
+                    st.error("Faça upload do arquivo XLSX")
+                    return
+                cils_validos = extrair_cils_do_xlsx(arquivo_xlsx)
+                if not cils_validos:
+                    st.error("Nenhum CIL válido encontrado no arquivo.")
+                    return
+            
+            elif not valor_selecionado:
+                st.error("Selecione um valor válido.")
+                return
+
+            # Se tudo estiver ok, prossegue
+            with st.spinner("Gerando folhas..."):
+                df_folhas, _ = db_manager.gerar_folhas_trabalho(
+                    tipo_selecionado, valor_selecionado, max_folhas, num_nibs, cils_validos
+                )
+                    
+            if df_folhas is not None and not df_folhas.empty:
+                st.success(f"✅ {df_folhas['FOLHA'].max()} folhas geradas, total de {len(df_folhas)} registros.")
                 
-                with st.spinner("Gerando folhas..."):
-                    df_folhas, _ = db_manager.gerar_folhas_trabalho(
-                        tipo_selecionado, valor_selecionado, max_folhas, num_nibs, cils_validos
-                    )
-                    
-                if df_folhas is not None:
-                    st.success(f"✅ {df_folhas['FOLHA'].max()} folhas geradas!")
-                    
-                    zip_data = generate_csv_zip(df_folhas)
-                    st.download_button(
-                        label="📦 Baixar ZIP",
-                        data=zip_data,
-                        file_name=f"folhas_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("⚠️ Nenhuma folha gerada")
+                zip_data = generate_csv_zip(df_folhas)
+                st.download_button(
+                    label=f"📦 Baixar ZIP com {df_folhas['FOLHA'].max()} Folha(s)",
+                    data=zip_data,
+                    file_name=f"folhas_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ Nenhuma folha gerada (todos os registros podem estar em 'prog' ou não há dados para o filtro).")
 
 def render_importacao(db_manager):
     """Renderização estática da importação"""
     st.header("📥 Importação de Dados")
     
     with st.container():
-        st.warning("⚠️ A importação substituirá todos os dados existentes!")
+        st.warning("⚠️ A importação **substituirá todos** os dados existentes na tabela `bd`!")
         
         uploaded_file = st.file_uploader("Selecione arquivo CSV:", type=["csv"])
         
         if uploaded_file and st.button("🚀 Importar Dados", use_container_width=True):
+            uploaded_file.seek(0) # Garante que o arquivo está no início
             with st.spinner("Importando..."):
                 if db_manager.importar_csv(uploaded_file):
                     st.success("✅ Importação concluída!")
                 else:
-                    st.error("❌ Falha na importação")
+                    st.error("❌ Falha na importação. Verifique se o arquivo possui as 31 colunas esperadas.")
 
 def render_usuarios(db_manager):
     """Renderização estática do gerenciamento de usuários"""
@@ -555,49 +601,77 @@ def render_usuarios(db_manager):
     
     with st.container():
         with st.expander("➕ Novo Usuário"):
+            # Usando form para evitar reruns parciais durante a criação
             with st.form("novo_usuario_form"):
-                username = st.text_input("Username")
-                nome = st.text_input("Nome completo")
-                password = st.text_input("Senha", type="password")
-                role = st.selectbox("Função", ["Administrador", "Assistente Administrativo", "Técnico"])
+                username = st.text_input("Username", key="new_user_username")
+                nome = st.text_input("Nome completo", key="new_user_nome")
+                password = st.text_input("Senha", type="password", key="new_user_password")
+                role = st.selectbox("Função", ["Administrador", "Assistente Administrativo", "Técnico"], key="new_user_role")
                 
                 if st.form_submit_button("Criar Usuário", use_container_width=True):
                     if username and password:
                         sucesso, msg = db_manager.criar_usuario(username, password, nome, role)
                         if sucesso:
                             st.success("✅ " + msg)
+                            st.rerun() # Rerun para atualizar a lista de usuários
                         else:
                             st.error("❌ " + msg)
+                    else:
+                        st.error("Preencha todos os campos obrigatórios.")
         
         st.markdown("---")
         st.subheader("Usuários Existentes")
         
+        # Obter usuários em cada rerun
         usuarios = db_manager.obter_usuarios()
+        
+        # Usar um formulário pai para englobar todas as edições para um único submit global
+        # Isso pode ser simplificado, mas no Streamlit 1.x, botões separados dentro de expanders
+        # requerem reruns para mostrar o sucesso/erro, o que está ok aqui.
         for user in usuarios:
-            with st.expander(f"👤 {user[1]} - {user[3]}"):
+            # Usando o ID do usuário como parte da chave para garantir unicidade
+            with st.expander(f"👤 {user[1]} - {user[3]} (ID: {user[0]})"):
                 col1, col2 = st.columns(2)
+                
+                # Campos de Edição
                 with col1:
-                    novo_nome = st.text_input("Nome", value=user[2], key=f"nome_{user[0]}")
+                    novo_nome = st.text_input("Nome", value=user[2], key=f"nome_edit_{user[0]}")
                     nova_role = st.selectbox(
                         "Função", 
                         ["Administrador", "Assistente Administrativo", "Técnico"],
                         index=["Administrador", "Assistente Administrativo", "Técnico"].index(user[3]),
-                        key=f"role_{user[0]}"
+                        key=f"role_edit_{user[0]}"
                     )
-                with col2:
-                    if st.button("💾 Salvar", key=f"save_{user[0]}"):
+                    
+                    if st.button("💾 Salvar Edição", key=f"save_edit_{user[0]}", use_container_width=True):
                         sucesso, msg = db_manager.editar_usuario(user[0], novo_nome, nova_role)
                         if sucesso:
                             st.success("✅ " + msg)
+                            st.rerun() # Rerun para atualizar a exibição do usuário
                         else:
                             st.error("❌ " + msg)
-                    
-                    nova_senha = st.text_input("Nova senha", type="password", key=f"pass_{user[0]}")
-                    if st.button("🔑 Alterar Senha", key=f"pass_btn_{user[0]}"):
+
+                # Campo de Senha e Exclusão
+                with col2:
+                    nova_senha = st.text_input("Nova senha (opcional)", type="password", key=f"pass_edit_{user[0]}")
+                    if st.button("🔑 Alterar Senha", key=f"pass_btn_{user[0]}", use_container_width=True, disabled=not nova_senha):
                         if nova_senha:
                             sucesso, msg = db_manager.alterar_senha(user[0], nova_senha)
                             if sucesso:
                                 st.success("✅ " + msg)
+                                st.rerun()
+                            else:
+                                st.error("❌ " + msg)
+                    
+                    # Botão de exclusão (com confirmação implícita)
+                    if st.button("🗑️ Excluir Usuário", key=f"del_btn_{user[0]}", use_container_width=True):
+                        if st.session_state.user['id'] == user[0]:
+                            st.error("❌ Você não pode excluir seu próprio usuário!")
+                        else:
+                            sucesso, msg = db_manager.excluir_usuario(user[0])
+                            if sucesso:
+                                st.success("✅ " + msg)
+                                st.rerun() # Rerun para remover o usuário da lista
                             else:
                                 st.error("❌ " + msg)
 
@@ -606,23 +680,40 @@ def render_reset(db_manager):
     st.header("🔄 Reset de Estado")
     
     with st.container():
-        tipo_reset = st.selectbox("Tipo de reset:", ["PT", "LOCALIDADE", "AVULSO"])
+        st.warning("⚠️ O reset irá alterar o estado 'prog' de volta para 'vazio' para os registros filtrados, permitindo que sejam gerados novamente.")
+        
+        tipo_reset = st.selectbox("Tipo de reset:", ["PT", "LOCALIDADE", "AVULSO"], key="tipo_reset_select")
         
         valor_reset = ""
         if tipo_reset in ["PT", "LOCALIDADE"]:
             valores = db_manager.obter_valores_unicos(tipo_reset.lower())
+            # Filtra valores em "prog"
+            valores_prog = db_manager.obter_valores_unicos(tipo_reset.lower(), filtro_estado='prog') 
+            
             if valores:
-                valor_reset = st.selectbox(f"Valor de {tipo_reset}:", ["Selecione..."] + valores)
+                # Use os valores que estão em 'prog' para o reset ser mais intuitivo
+                if not valores_prog:
+                    st.info(f"Nenhum registro encontrado em 'prog' para {tipo_reset}.")
+                    valor_reset = "Nenhum em 'prog'"
+                else:
+                    valor_reset = st.selectbox(f"Valor de {tipo_reset} (com registros em 'prog'):", ["Selecione..."] + valores_prog, key="valor_reset_select")
+                    
+        # Não precisa de selectbox para AVULSO, pois reseta todos em 'prog'
+        if tipo_reset == "AVULSO":
+             st.info("O modo AVULSO resetará *todos* os registros que estiverem com o estado 'prog'.")
+
         
         if st.button("🔴 Executar Reset", use_container_width=True):
-            if tipo_reset in ["PT", "LOCALIDADE"] and valor_reset == "Selecione...":
-                st.error("Selecione um valor válido")
+            if tipo_reset in ["PT", "LOCALIDADE"] and (valor_reset == "Selecione..." or valor_reset == "Nenhum em 'prog'"):
+                st.error("Selecione um valor válido ou mude o Tipo de reset.")
             else:
-                sucesso, resultado = db_manager.resetar_estado(tipo_reset, valor_reset)
-                if sucesso:
-                    st.success(f"✅ Reset concluído. {resultado} registros afetados.")
-                else:
-                    st.error("❌ Falha no reset")
+                with st.spinner("Executando reset..."):
+                    sucesso, resultado = db_manager.resetar_estado(tipo_reset, valor_reset)
+                    if sucesso:
+                        st.success(f"✅ Reset concluído. {resultado} registros afetados.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Falha no reset")
 
 # --- FUNÇÃO PRINCIPAL SUPER ESTÁTICA ---
 def main():
@@ -631,9 +722,10 @@ def main():
     # Inicialização única do database manager
     if 'db_manager' not in st.session_state:
         try:
+            # A URL deve vir de st.secrets e ser acessível
             st.session_state.db_manager = PostgresDatabaseManager(POSTGRES_URL)
-        except Exception:
-            st.error("❌ Falha crítica na conexão com o banco")
+        except Exception as e:
+            st.error(f"❌ Falha crítica na conexão com o banco. Verifique as credenciais em st.secrets e a conexão: {e}")
             return
     
     # Renderização condicional SUPER SIMPLES
