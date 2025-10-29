@@ -9,7 +9,35 @@ import os
 from io import BytesIO
 from zipfile import ZipFile
 
+# --- CONFIGURAÇÃO INICIAL ROBUSTA ---
+st.set_page_config(
+    page_title="V.Ferreira (perdas)",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
+)
 
+# CSS para estabilidade da interface
+st.markdown("""
+<style>
+    .stApp {
+        overflow: hidden;
+    }
+    .main .block-container {
+        padding-top: 1rem;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0.5rem;
+    }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display: none;}
+</style>
+""", unsafe_allow_html=True)
 
 # Para PostgreSQL e ORM (SQLAlchemy)
 try:
@@ -562,10 +590,10 @@ def login_page(db_manager):
     """Página de login."""
     st.title("Sistema de Gestão de Dados - Login")
     
-    with st.form("login_form"):
-        username = st.text_input("Nome de Usuário")
-        password = st.text_input("Senha", type="password")
-        submitted = st.form_submit_button("Entrar")
+    with st.form("login_form", key="login_form_unique"):
+        username = st.text_input("Nome de Usuário", key="username_input")
+        password = st.text_input("Senha", type="password", key="password_input")
+        submitted = st.form_submit_button("Entrar", key="login_submit")
 
         if submitted:
             user_info = db_manager.autenticar_usuario(username, password)
@@ -583,7 +611,7 @@ def manager_page(db_manager):
     st.sidebar.markdown(f"**Usuário:** {user['nome']} ({user['role']})")
     
     # Botão de Logout
-    if st.sidebar.button("Sair"):
+    if st.sidebar.button("Sair", key="logout_button"):
         st.session_state['authenticated'] = False
         st.session_state['user'] = None
         st.rerun()
@@ -591,10 +619,10 @@ def manager_page(db_manager):
     # --- Seção para Alteração de Senha Pessoal (Todos os usuários) ---
     st.sidebar.markdown("---")
     with st.sidebar.expander("🔐 Alterar Minha Senha"):
-        with st.form("alterar_minha_senha"):
+        with st.form("alterar_minha_senha", key="alterar_senha_form"):
             nova_senha = st.text_input("Nova Senha", type="password", key="nova_senha_pessoal")
             confirmar_senha = st.text_input("Confirmar Nova Senha", type="password", key="confirmar_senha_pessoal")
-            if st.form_submit_button("Alterar Minha Senha"):
+            if st.form_submit_button("Alterar Minha Senha", key="alterar_senha_submit"):
                 if nova_senha and confirmar_senha:
                     if nova_senha == confirmar_senha:
                         sucesso, mensagem = db_manager.alterar_senha(user['id'], nova_senha)
@@ -614,7 +642,7 @@ def manager_page(db_manager):
         st.header("Gerenciamento de Dados e Folhas de Trabalho")
         # --- Abas de Navegação para Administrador ---
         tabs = ["Importação", "Geração de Folhas", "Gerenciamento de Usuários", "Reset de Estado"]
-        selected_tab = st.selectbox("Selecione a Ação:", tabs)
+        selected_tab = st.selectbox("Selecione a Ação:", tabs, key="main_tab_selector")
         
     elif user['role'] == 'Assistente Administrativo':
         st.header("Geração de Folhas de Trabalho")
@@ -644,7 +672,7 @@ def manager_page(db_manager):
         uploaded_file = st.file_uploader("Selecione o arquivo CSV:", type=["csv"], key="import_csv")
 
         if uploaded_file is not None:
-            if st.button("Processar e Importar para o Banco de Dados"):
+            if st.button("Processar e Importar para o Banco de Dados", key="import_button"):
                 with st.spinner("Processando e importando..."):
                     if db_manager.importar_csv(uploaded_file, 'BD'):
                         st.success("🎉 Importação concluída com sucesso!")
@@ -653,7 +681,6 @@ def manager_page(db_manager):
                         st.error("Falha na importação. Verifique o formato do arquivo e o console para detalhes.")
                         
     # =========================================================================
-    # =========================================================================
     # ABA 2: GERAÇÃO DE FOLHAS (TODOS OS USUÁRIOS)
     # =========================================================================
     elif selected_tab == "Geração de Folhas":
@@ -661,7 +688,7 @@ def manager_page(db_manager):
         st.markdown("### 📝 Geração de Folhas de Trabalho")
 
         tipos_folha = ["PT", "LOCALIDADE", "AVULSO"]
-        tipo_selecionado = st.radio("Tipo de Geração: V.Ferreira", tipos_folha, horizontal=True)
+        tipo_selecionado = st.radio("Tipo de Geração: V.Ferreira", tipos_folha, horizontal=True, key="tipo_folha_radio")
         
         valor_selecionado = None
         arquivo_xlsx = None
@@ -670,7 +697,7 @@ def manager_page(db_manager):
             coluna = tipo_selecionado
             valores_unicos = db_manager.obter_valores_unicos(coluna)
             valores_unicos.insert(0, "Selecione...")
-            valor_selecionado = st.selectbox(f"Selecione o valor de **{coluna}**:", valores_unicos)
+            valor_selecionado = st.selectbox(f"Selecione o valor de **{coluna}**:", valores_unicos, key=f"valor_{coluna}")
             if valor_selecionado == "Selecione...":
                 valor_selecionado = None
                 
@@ -700,7 +727,7 @@ def manager_page(db_manager):
                     st.success(f"✅ Arquivo carregado com sucesso! {len(df_preview)} linhas encontradas.")
                     
                     # Mostrar preview das primeiras linhas
-                    with st.expander("👀 Visualizar primeiras linhas do arquivo"):
+                    with st.expander("👀 Visualizar primeiras linhas do arquivo", key="preview_expander"):
                         st.dataframe(df_preview.head(10))
                         
                     # Extrair CILs do arquivo
@@ -714,7 +741,7 @@ def manager_page(db_manager):
             
             # Template para download
             st.markdown("---")
-            with st.expander("📋 Baixar Template de Exemplo"):
+            with st.expander("📋 Baixar Template de Exemplo", key="template_expander"):
                 st.markdown("""
                 **Template recomendado:**
                 - Arquivo XLSX com uma coluna chamada **'cil'**
@@ -733,25 +760,32 @@ def manager_page(db_manager):
                 
                 # Criar arquivo template para download
                 template_buffer = BytesIO()
-                with pd.ExcelWriter(template_buffer, engine='xlsxwriter') as writer:
-                    df_template.to_excel(writer, sheet_name='CILs', index=False)
+                try:
+                    # Tenta usar xlsxwriter primeiro
+                    with pd.ExcelWriter(template_buffer, engine='xlsxwriter') as writer:
+                        df_template.to_excel(writer, sheet_name='CILs', index=False)
+                except ImportError:
+                    # Fallback para openpyxl se xlsxwriter não estiver disponível
+                    with pd.ExcelWriter(template_buffer, engine='openpyxl') as writer:
+                        df_template.to_excel(writer, sheet_name='CILs', index=False)
                 template_buffer.seek(0)
                 
                 st.download_button(
                     label="📥 Baixar Template de Exemplo",
                     data=template_buffer.getvalue(),
                     file_name="template_cils.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_template"
                 )
                 
         # Parâmetros de Geração
         col1, col2 = st.columns(2)
         with col1:
-            num_nibs_por_folha = st.number_input("NIBs por Folha:", min_value=1, value=50)
+            num_nibs_por_folha = st.number_input("NIBs por Folha:", min_value=1, value=50, key="nibs_por_folha")
         with col2:
-            max_folhas = st.number_input("Máximo de Folhas a Gerar:", min_value=1, value=10)
+            max_folhas = st.number_input("Máximo de Folhas a Gerar:", min_value=1, value=10, key="max_folhas")
 
-        if st.button("Gerar e Baixar Folhas de Trabalho"):
+        if st.button("Gerar e Baixar Folhas de Trabalho", key="gerar_folhas_button"):
             if tipo_selecionado != "AVULSO" and not valor_selecionado:
                 st.error("Por favor, selecione um valor válido de PT ou Localidade.")
             elif tipo_selecionado == "AVULSO" and not arquivo_xlsx:
@@ -784,7 +818,8 @@ def manager_page(db_manager):
                         label="📦 Baixar Arquivo ZIP com Folhas (CSV)",
                         data=zip_data,
                         file_name=f"Folhas_CSV_{tipo_selecionado}_{valor_selecionado or 'AVULSO'}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                        mime="application/zip"
+                        mime="application/zip",
+                        key="download_zip"
                     )
                     
                     # Exibir informações específicas para cada tipo
@@ -819,14 +854,14 @@ def manager_page(db_manager):
         st.markdown("### 🧑‍💻 Gerenciamento de Usuários")
         
         # --- Criar Novo Usuário ---
-        with st.expander("➕ Criar Novo Usuário"):
-            with st.form("new_user_form"):
-                new_username = st.text_input("Nome de Usuário (login)")
-                new_name = st.text_input("Nome Completo")
-                new_password = st.text_input("Senha", type="password")
-                new_role = st.selectbox("Função:", ['Administrador', 'Assistente Administrativo', 'Técnico'])
+        with st.expander("➕ Criar Novo Usuário", key="criar_usuario_expander"):
+            with st.form("new_user_form", key="new_user_form_unique"):
+                new_username = st.text_input("Nome de Usuário (login)", key="new_username")
+                new_name = st.text_input("Nome Completo", key="new_name")
+                new_password = st.text_input("Senha", type="password", key="new_password")
+                new_role = st.selectbox("Função:", ['Administrador', 'Assistente Administrativo', 'Técnico'], key="new_role")
                 
-                if st.form_submit_button("Criar Usuário"):
+                if st.form_submit_button("Criar Usuário", key="create_user_button"):
                     if new_username and new_password:
                         sucesso, mensagem = db_manager.criar_usuario(new_username, new_password, new_name, new_role)
                         if sucesso:
@@ -918,25 +953,31 @@ def manager_page(db_manager):
 # --- Função Principal ---
 def main():
     """Função principal do aplicativo Streamlit."""
-    st.set_page_config(page_title="V.Ferreira (perdas)", layout="wide" )
-     
-    # 1. Configuração do DB
+    
+    # Inicialização segura do estado
     try:
-        db_manager = PostgresDatabaseManager(POSTGRES_URL)
-    except Exception:
-        st.error("O aplicativo não pôde se conectar ao banco de dados. Verifique as credenciais ou a URL.")
-        return
+        # 1. Configuração do DB
+        try:
+            db_manager = PostgresDatabaseManager(POSTGRES_URL)
+        except Exception:
+            st.error("O aplicativo não pôde se conectar ao banco de dados. Verifique as credenciais ou a URL.")
+            return
 
-    # 2. Inicialização do Estado de Sessão
-    if 'authenticated' not in st.session_state:
-        st.session_state['authenticated'] = False
-        st.session_state['user'] = None
+        # 2. Inicialização do Estado de Sessão
+        if 'authenticated' not in st.session_state:
+            st.session_state['authenticated'] = False
+            st.session_state['user'] = None
+            st.session_state['page_loaded'] = True
 
-    # 3. Roteamento
-    if st.session_state['authenticated']:
-        manager_page(db_manager)
-    else:
-        login_page(db_manager)
+        # 3. Roteamento
+        if st.session_state['authenticated']:
+            manager_page(db_manager)
+        else:
+            login_page(db_manager)
+            
+    except Exception as e:
+        st.error("Erro temporário. Por favor, recarregue a página.")
+        st.stop()
 
 if __name__ == '__main__':
     main()
