@@ -918,12 +918,7 @@ def manager_page(db_manager):
 # --- Função Principal ---
 def main():
     """Função principal do aplicativo Streamlit."""
-    st.set_page_config(page_title="V.Ferreira (perdas)", layout="wide",  menu_items={
-        'Get Help': None,       # Remove link de ajuda
-        'Report a bug': None,   # Remove link de reportar bug
-        'About': None           # Remove seção "About"
-    }
-    )
+    st.set_page_config(page_title="V.Ferreira (perdas)", layout="wide" )
      
     # 1. Configuração do DB
     try:
