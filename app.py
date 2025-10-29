@@ -9,8 +9,9 @@ import os
 from io import BytesIO
 from zipfile import ZipFile
 
-# Para PostgreSQL e ORM (SQLAlchemy) minha senha npg_r4JNdQ0OcYwf 
-#
+
+
+# Para PostgreSQL e ORM (SQLAlchemy)
 try:
     from sqlalchemy import create_engine, text, inspect
     from sqlalchemy.exc import SQLAlchemyError
@@ -33,10 +34,10 @@ except Exception as e:
     st.error("❌ Erro ao carregar as credenciais do banco de dados. Verifique o arquivo de segredos.")
     st.stop()
 
-# Construção da URL de conexão a partir do dicionário de configuração psql psql 'postgresql://neondb_owner:npg_waOSqYc2bx7M@ep-red-cloud-ae6c9hgq-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+# Construção da URL de conexão a partir do dicionário de configuração
 POSTGRES_URL = (
     f"postgresql+psycopg2://{POSTGRES_CONFIG['user']}:{POSTGRES_CONFIG['password']}@"
-    f"{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}?sslmode=require"
+    f"{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
 )
 
 # --- DatabaseManager para PostgreSQL ---
@@ -730,9 +731,9 @@ def manager_page(db_manager):
                 }
                 df_template = pd.DataFrame(template_data)
                 
-                # Criar arquivo template para download 
+                # Criar arquivo template para download
                 template_buffer = BytesIO()
-                with pd.ExcelWriter(template_buffer, engine='openpyxl') as writer:
+                with pd.ExcelWriter(template_buffer, engine='xlsxwriter') as writer:
                     df_template.to_excel(writer, sheet_name='CILs', index=False)
                 template_buffer.seek(0)
                 
@@ -917,8 +918,13 @@ def manager_page(db_manager):
 # --- Função Principal ---
 def main():
     """Função principal do aplicativo Streamlit."""
-    st.set_page_config(page_title="V.Ferreira (perdas)", layout="wide")
-    
+    st.set_page_config(page_title="V.Ferreira (perdas)", layout="wide",  menu_items={
+        'Get Help': None,       # Remove link de ajuda
+        'Report a bug': None,   # Remove link de reportar bug
+        'About': None           # Remove seção "About"
+    }
+    )
+     
     # 1. Configuração do DB
     try:
         db_manager = PostgresDatabaseManager(POSTGRES_URL)
