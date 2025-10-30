@@ -10,7 +10,7 @@ from io import BytesIO
 from zipfile import ZipFile
 
 # Para PostgreSQL e ORM (SQLAlchemy) minha senha npg_r4JNdQ0OcYwf 
-#psql 'postgresql://neondb_owner:npg_gUjo2Z7spnmR@ep-red-cloud-ae6c9hgq-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+#psql 'postgresql://neondb_owner:npg_3ULehfw8lWnm@ep-red-cloud-ae6c9hgq-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
 try:
     from sqlalchemy import create_engine, text, inspect
     from sqlalchemy.exc import SQLAlchemyError
@@ -473,8 +473,8 @@ def generate_csv_zip(df_completo, num_nibs_por_folha):
             csv_buffer = BytesIO()
             
             # Exporta para CSV
-            folha_df_export.to_csv(csv_buffer, index=False, encoding='cp1252')
-            #folha_df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            
+            folha_df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig', sep=';')
             csv_buffer.seek(0)
             
             # Adiciona o arquivo CSV ao ZIP
