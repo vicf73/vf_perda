@@ -473,7 +473,16 @@ def generate_csv_zip(df_completo, num_nibs_por_folha):
             csv_buffer = BytesIO()
             
             # Exporta para CSV
-            folha_df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            #folha_df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            # Configuração mais prática que funciona na maioria dos casos
+            folha_df_export.to_csv(
+                csv_buffer, 
+                index=False, 
+                encoding='utf-8',  # Mude para 'latin-1' se precisar de compatibilidade absoluta
+                sep=',',
+                decimal='.',
+                date_format='%Y-%m-%d'  # Ou '%m/%d/%Y' dependendo da região
+            )
             csv_buffer.seek(0)
             
             # Adiciona o arquivo CSV ao ZIP
