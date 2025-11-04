@@ -71,7 +71,7 @@ class PostgresDatabaseManager:
                     nib TEXT, seq TEXT, localidade TEXT, pt TEXT, desv TEXT,
                     mat_leitura TEXT, desc_uni TEXT, est_contr TEXT, anomalia TEXT, id TEXT,
                     produto TEXT, nome TEXT, criterio TEXT, desc_tp_cli TEXT, tip TEXT,
-                    tarifa TEXT, modelo TEXT, lat DOUBLE PRECISION, long DOUBLE PRECISION, fraud TEXT,
+                    sit_div TEXT, modelo TEXT, lat DOUBLE PRECISION, long DOUBLE PRECISION, est_inspec TEXT,
                     estado TEXT
                 )
             '''))
@@ -236,14 +236,14 @@ class PostgresDatabaseManager:
                     st.error(f"❌ O arquivo BD deve ter pelo menos {colunas_esperadas} colunas.")
                     return False
                 
-                # Mapeamento de colunas
+                # Mapeamento de colunas - CORRIGIDO
                 column_mapping = {
                     0: 'cil', 1: 'prod', 2: 'contador', 3: 'leitura', 4: 'mat_contador',
                     5: 'med_fat', 6: 'qtd', 7: 'valor', 8: 'situacao', 9: 'acordo',
                     10: 'nib', 11: 'seq', 12: 'localidade', 13: 'pt', 14: 'desv',
-                    15: 'mat_leitura', 16: 'desc_uni', 17: 'est_contr', 18: 'anomalia', 19: 'id',
+                    15: 'mat_leitura', 16: 'desc_uni', 17: 'est_contr', 18: 'anomalia', 19: 'id',  # CORRIGIDO: est_contr
                     20: 'produto', 21: 'nome', 22: 'criterio', 23: 'desc_tp_cli', 24: 'tip',
-                    25: 'tarifa', 26: 'modelo', 27: 'lat', 28: 'long', 29: 'fraud',
+                    25: 'sit_div', 26: 'modelo', 27: 'lat', 28: 'long', 29: 'est_inspec',
                     30: 'estado'
                 }
                 
@@ -301,7 +301,19 @@ class PostgresDatabaseManager:
         """Obtém valores únicos de uma coluna, com limpeza de string no SQL."""
         try:
             with self.engine.connect() as conn:
-                coluna_sql = coluna.lower()
+                # MAPEAMENTO DE COLUNAS - CORRIGIDO
+                mapeamento_colunas = {
+                    'est_ctr': 'est_contr',  # Mapeia est_ctr para est_contr
+                    'desc_tp_cli': 'desc_tp_cli',  # Mantém igual
+                    'criterio': 'criterio',  # Mantém igual
+                    'anomalia': 'anomalia',   # Mantém igual
+                    'sit_div': 'sit_div',  # Situaçao da divida
+                    'est_inspec': 'est_inspec',   # estado inspeçao
+                    'desv': 'desv'    # desvio faturaçao < 40 kwh
+                }
+                
+                # Usa o nome mapeado ou o original se não estiver no mapeamento
+                coluna_sql = mapeamento_colunas.get(coluna.lower(), coluna.lower())
                     
                 # Limpeza (UPPER/TRIM) no SQL para garantir a consistência
                 query = text(f"""
@@ -319,24 +331,41 @@ class PostgresDatabaseManager:
             st.error(f"❌ Erro ao obter valores únicos para {coluna}: {e}")
             return []
 
-    def gerar_folhas_trabalho(self, tipo_folha, valor_selecionado, quantidade_folhas, quantidade_nibs, cils_validos=None):
+    def gerar_folhas_trabalho(self, tipo_folha, valor_selecionado, quantidade_folhas, quantidade_nibs, cils_validos=None, criterio_tipo=None, criterio_valor=None):
         """Gera folhas de trabalho, movendo a filtragem e ordenação complexas para o SQL."""
         try:
             with self.engine.connect() as conn:
                 
                 cils_restantes_nao_encontrados = []
                 
-                # 1. Construção da Query de Seleção (Performance)
+                # 1. Construção da Query de Seleção (Performance) - CORRIGIDO
                 select_clause = "SELECT * FROM bd"
-                where_conditions = ["UPPER(TRIM(criterio)) = 'SUSP'", "LOWER(TRIM(estado)) != 'prog'"]
+                where_conditions = ["LOWER(TRIM(estado)) != 'prog'"]  # Condição base mantida
                 query_params = {}
                 
+                # MAPEAMENTO DE COLUNAS PARA CRITÉRIOS - CORRIGIDO
+                mapeamento_criterios = {
+                    "Criterio": "criterio",
+                    "Anomalia": "anomalia", 
+                    "DESC_TP_CLI": "desc_tp_cli",
+                    "EST_CTR": "est_contr",
+                    "sit_div": "sit_div",
+                    "desv": "desv",
+                    "est_inspec": "est_inspec" 
+                }
+                
+                # Adicionar critério de seleção baseado no tipo escolhido
+                if criterio_tipo and criterio_valor:
+                    coluna_criterio = mapeamento_criterios.get(criterio_tipo)
+                    if coluna_criterio:
+                        where_conditions.append(f"UPPER(TRIM({coluna_criterio})) = :criterio_valor")
+                        query_params['criterio_valor'] = criterio_valor.strip().upper()
+
+                # Condições específicas por tipo de folha
                 if tipo_folha == "AVULSO" and cils_validos:
-                    # Uso de ANY para passar a lista de CILs
                     where_conditions.append("cil = ANY(:cils)")
                     query_params['cils'] = cils_validos
                 elif valor_selecionado:
-                    # Limpeza do valor e filtro no SQL (UPPER/TRIM)
                     valor_selecionado_limpo = valor_selecionado.strip().upper()
                     coluna_filtro = 'pt' if tipo_folha == "PT" else 'localidade'
                     where_conditions.append(f"UPPER(TRIM({coluna_filtro})) = :valor_filtro")
@@ -379,10 +408,18 @@ class PostgresDatabaseManager:
                     folha_df['FOLHA'] = i + 1
                     folhas.append(folha_df)
                     
-                    # 4. Atualização de Estado (em bloco via SQL)
+                    # 4. Atualização de Estado (em bloco via SQL) - CORRIGIDO
                     update_where_conditions = ["LOWER(TRIM(estado)) != 'prog'"]
                     update_params = {'nibs': nibs_na_folha}
                     
+                    # Adicionar critério na atualização - CORRIGIDO
+                    if criterio_tipo and criterio_valor:
+                        coluna_criterio = mapeamento_criterios.get(criterio_tipo)
+                        if coluna_criterio:
+                            update_where_conditions.append(f"UPPER(TRIM({coluna_criterio})) = :criterio_valor")
+                            update_params['criterio_valor'] = criterio_valor.strip().upper()
+
+                    # Condições específicas por tipo de folha
                     if tipo_folha == "PT" or tipo_folha == "LOCALIDADE":
                         coluna_filtro = 'pt' if tipo_folha == "PT" else 'localidade'
                         update_where_conditions.append(f"UPPER(TRIM({coluna_filtro})) = :valor_update")
@@ -441,8 +478,17 @@ class PostgresDatabaseManager:
 
 # --- Funções de Interface Streamlit ---
 
-def generate_csv_zip(df_completo, num_nibs_por_folha):
-    """Gera um arquivo ZIP contendo múltiplas folhas CSV com apenas as 10 primeiras colunas."""
+def sanitizar_nome_arquivo(nome):
+    """Remove caracteres inválidos para nomes de arquivo."""
+    # Remove caracteres inválidos e substitui espaços por underscore
+    nome_seguro = re.sub(r'[<>:"/\\|?*]', '', nome)
+    nome_seguro = nome_seguro.replace(' ', '_')
+    # Limita o tamanho do nome para evitar problemas com paths longos
+    return nome_seguro[:100]
+
+def generate_csv_zip(df_completo, num_nibs_por_folha, criterio_tipo, criterio_valor):
+    """Gera um arquivo ZIP contendo múltiplas folhas CSV com apenas as 10 primeiras colunas.
+    O nome dos arquivos inclui o critério selecionado."""
     
     # Extrai o número máximo de folhas geradas
     max_folha = df_completo['FOLHA'].max()
@@ -459,6 +505,9 @@ def generate_csv_zip(df_completo, num_nibs_por_folha):
     if len(colunas_disponiveis) < len(colunas_exportar):
         st.warning(f"⚠️ Algumas colunas não encontradas. Exportando {len(colunas_disponiveis)} colunas.")
     
+    # Sanitiza o nome do critério para usar no nome do arquivo
+    criterio_nome_seguro = sanitizar_nome_arquivo(criterio_valor)
+    
     # Cria um buffer de memória para o ZIP
     zip_buffer = BytesIO()
     
@@ -473,12 +522,14 @@ def generate_csv_zip(df_completo, num_nibs_por_folha):
             csv_buffer = BytesIO()
             
             # Exporta para CSV
-            
             folha_df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig', sep=';')
             csv_buffer.seek(0)
             
+            # Nome do arquivo personalizado com o critério
+            nome_arquivo = f'{criterio_tipo}_{criterio_nome_seguro}_Folha_{i}.csv'
+            
             # Adiciona o arquivo CSV ao ZIP
-            zip_file.writestr(f'Folha_Trabalho_{i}.csv', csv_buffer.getvalue())
+            zip_file.writestr(nome_arquivo, csv_buffer.getvalue())
 
     zip_buffer.seek(0)
     return zip_buffer.read()
@@ -743,6 +794,47 @@ def manager_page(db_manager):
                     file_name="template_cils.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+        # --- NOVA SEÇÃO: Seleção de Critério ---
+        st.markdown("### 🔍 Critério de Seleção")
+
+        # Opções de critério
+        criterio_opcoes = ["Criterio", "Anomalia", "DESC_TP_CLI", "EST_CTR", "sit_div", "desv", "est_inspec"]
+        criterio_selecionado = st.radio(
+            "Selecione o tipo de critério:",
+            criterio_opcoes,
+            horizontal=True,
+            key="criterio_tipo"
+        )
+
+        # Obter valores únicos baseados no critério selecionado
+        if criterio_selecionado:
+            valores_criterio = db_manager.obter_valores_unicos(criterio_selecionado.lower())
+            
+            if criterio_selecionado == "Criterio":
+                # Para Critério, mostrar apenas "SUSP" como opção padrão
+                if "SUSP" in valores_criterio:
+                    valor_criterio_selecionado = "SUSP"
+                    st.info(f"🔍 **Critério selecionado:** {criterio_selecionado} = '{valor_criterio_selecionado}'")
+                else:
+                    st.error("❌ Critério 'SUSP' não encontrado no banco de dados.")
+                    valor_criterio_selecionado = None
+            else:
+                # Para Anomalia, DESC_TP_CLI e EST_CTR permitir seleção
+                if valores_criterio:
+                    valores_criterio.insert(0, "Selecione...")
+                    valor_criterio_selecionado = st.selectbox(
+                        f"Selecione o valor para **{criterio_selecionado}**:",
+                        valores_criterio,
+                        key="criterio_valor"
+                    )
+                    if valor_criterio_selecionado == "Selecione...":
+                        valor_criterio_selecionado = None
+                else:
+                    st.warning(f"ℹ️ Nenhum valor encontrado para {criterio_selecionado}.")
+                    valor_criterio_selecionado = None
+        else:
+            valor_criterio_selecionado = None
                 
         # Parâmetros de Geração
         col1, col2 = st.columns(2)
@@ -756,6 +848,8 @@ def manager_page(db_manager):
                 st.error("Por favor, selecione um valor válido de PT ou Localidade.")
             elif tipo_selecionado == "AVULSO" and not arquivo_xlsx:
                 st.error("Por favor, faça upload de um arquivo XLSX com a lista de CILs.")
+            elif not criterio_selecionado or not valor_criterio_selecionado:
+                st.error("Por favor, selecione um critério de filtro válido.")
             else:
                 cils_validos = None
                 if tipo_selecionado == "AVULSO":
@@ -767,7 +861,13 @@ def manager_page(db_manager):
 
                 with st.spinner("Gerando folhas de trabalho e atualizando estado no banco..."):
                     df_folhas, cils_nao_encontrados = db_manager.gerar_folhas_trabalho(
-                        tipo_selecionado, valor_selecionado, max_folhas, num_nibs_por_folha, cils_validos
+                        tipo_selecionado, 
+                        valor_selecionado, 
+                        max_folhas, 
+                        num_nibs_por_folha, 
+                        cils_validos,
+                        criterio_selecionado,  # Novo parâmetro
+                        valor_criterio_selecionado  # Novo parâmetro
                     )
                     
                 if df_folhas is not None and not df_folhas.empty:
@@ -778,20 +878,27 @@ def manager_page(db_manager):
                                         'med_fat', 'qtd', 'valor', 'situacao', 'acordo']
                     st.info(f"📋 Cada folha CSV contém as {len(colunas_exportadas)} primeiras colunas: {', '.join(colunas_exportadas)}")
                     
-                    zip_data = generate_csv_zip(df_folhas, num_nibs_por_folha)
+                    # Gerar ZIP com nomes personalizados
+                    zip_data = generate_csv_zip(df_folhas, num_nibs_por_folha, criterio_selecionado, valor_criterio_selecionado)
+                    
+                    # Nome do arquivo ZIP também personalizado
+                    nome_zip = f"Folhas_{criterio_selecionado}_{sanitizar_nome_arquivo(valor_criterio_selecionado)}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
                     
                     st.download_button(
                         label="📦 Baixar Arquivo ZIP com Folhas (CSV)",
                         data=zip_data,
-                        file_name=f"Folhas_CSV_{tipo_selecionado}_{valor_selecionado or 'AVULSO'}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        file_name=nome_zip,
                         mime="application/zip"
                     )
+                    
+                    # Informar sobre o nome das folhas
+                    st.info(f"📝 **Nome das folhas:** Cada folha será nomeada como `{criterio_selecionado}_{sanitizar_nome_arquivo(valor_criterio_selecionado)}_Folha_X.csv`")
                     
                     # Exibir informações específicas para cada tipo
                     if tipo_selecionado == "AVULSO":
                         # Exibir CILs não encontrados (apenas para AVULSO)
                         if cils_nao_encontrados:
-                            st.warning(f"⚠️ {len(cils_nao_encontrados)} CIL(s) não foram encontrados (ou já estavam em 'prog'/não-SUSP):")
+                            st.warning(f"⚠️ {len(cils_nao_encontrados)} CIL(s) não foram encontrados (ou já estavam em 'prog'/não atendem ao critério):")
                             st.code(", ".join(cils_nao_encontrados[:20]) + ("..." if len(cils_nao_encontrados) > 20 else ""))
                             
                         # Estatísticas de sucesso (apenas para AVULSO)
@@ -804,9 +911,9 @@ def manager_page(db_manager):
                         
                 elif df_folhas is None:
                     if tipo_selecionado == "AVULSO":
-                        st.warning("⚠️ Nenhuma folha gerada. Verifique se os CILs existem no banco e têm critério 'SUSP'.")
+                        st.warning("⚠️ Nenhuma folha gerada. Verifique se os CILs existem no banco e atendem ao critério selecionado.")
                     else:
-                        st.warning("⚠️ Nenhuma folha gerada. Verifique se existem registros com critério 'SUSP' para o valor selecionado.")
+                        st.warning("⚠️ Nenhuma folha gerada. Verifique se existem registros que atendam ao critério selecionado para o valor escolhido.")
 
     # =========================================================================
     # ABA 3: GERENCIAMENTO DE USUÁRIOS (APENAS ADMINISTRADOR)
