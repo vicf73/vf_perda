@@ -42,43 +42,26 @@ except ImportError:
     st.error("❌ SQLAlchemy não está instalado. Instale com: pip install sqlalchemy")
     st.stop()
 
-# --- CONFIGURAÇÃO PARA STREAMLIT.IO ---
-# Usar st.secrets para configurações sensíveis
+# --- CONFIGURAÇÃO PARA STREAMLIT.IO COM SECRETS ---
 try:
-    # Configuração para PostgreSQL (Neon.tech ou similar)
+    # Usar st.secrets para configurações sensíveis
     POSTGRES_CONFIG = {
-        'host': st.secrets.get("POSTGRES_HOST", ""),
-        'port': st.secrets.get("POSTGRES_PORT", "5432"),
-        'database': st.secrets.get("POSTGRES_DATABASE", ""),
-        'user': st.secrets.get("POSTGRES_USER", ""),
-        'password': st.secrets.get("POSTGRES_PASSWORD", "")
+        'host': st.secrets["postgres"]["host"],
+        'port': st.secrets["postgres"]["port"],
+        'database': st.secrets["postgres"]["database"],
+        'user': st.secrets["postgres"]["user"],
+        'password': st.secrets["postgres"]["password"]
     }
     
-    # Verificar se todas as configurações necessárias estão presentes
-    required_configs = ['host', 'database', 'user', 'password']
-    missing_configs = [config for config in required_configs if not POSTGRES_CONFIG[config]]
-    
-    if missing_configs:
-        st.error(f"❌ Configurações do banco de dados ausentes: {', '.join(missing_configs)}")
-        st.info("💡 Configure as secrets no Streamlit Community Cloud:")
-        st.code(f"""
-# No arquivo .streamlit/secrets.toml:
-POSTGRES_HOST = "seu-host.neon.tech"
-POSTGRES_DATABASE = "seu-database"
-POSTGRES_USER = "seu-user"
-POSTGRES_PASSWORD = "sua-senha"
-POSTGRES_PORT = "5432"
-        """)
-        st.stop()
-    
-    logger.info(f"Conectando ao banco: {POSTGRES_CONFIG['host']}")
+    logger.info(f"Conectando ao Neon.tech: {POSTGRES_CONFIG['host']}")
     
 except Exception as e:
     st.error("❌ Erro ao carregar as configurações do banco de dados.")
+    st.info("💡 Verifique se as secrets estão configuradas corretamente no Streamlit Cloud.")
     logger.error(f"Erro nas configurações do banco: {e}")
     st.stop()
 
-# Construção da URL de conexão (compatível com Streamlit.io)
+# Construção da URL de conexão
 POSTGRES_URL = f"postgresql://{POSTGRES_CONFIG['user']}:{POSTGRES_CONFIG['password']}@{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
 
 # --- DECORATOR PARA SEGURANÇA ---
@@ -108,9 +91,9 @@ def clean_session_state():
         except:
             pass
 
-# --- DatabaseManager Compatível com Streamlit.io ---
+# --- DatabaseManager para Neon.tech ---
 class PostgresDatabaseManager:
-    """Gerencia a conexão e operações com o banco de dados PostgreSQL."""
+    """Gerencia a conexão e operações com o banco de dados PostgreSQL no Neon.tech."""
     
     MAPEAMENTO_COLUNAS = {
         'est_ctr': 'est_contr',
