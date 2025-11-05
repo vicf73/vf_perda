@@ -6,6 +6,7 @@ import io
 import chardet
 import bcrypt
 import os
+import re  # ← ADICIONAR ESTA LINHA
 from io import BytesIO
 from zipfile import ZipFile
 
