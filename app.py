@@ -9,6 +9,7 @@ import os
 import re
 import logging
 import time
+import functools
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -27,7 +28,7 @@ try:
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
-    st.warning("⚠️ Plotly não está instalado. Alguns gráficos não estarão disponíveis. Instale com: pip install plotly")
+    st.warning("⚠️ Plotly não está instalado. Alguns gráficos não estarão disponíveis.")
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,34 +39,76 @@ try:
     from sqlalchemy.exc import SQLAlchemyError
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
-    st.error("❌ SQLAlchemy não está instalado. Instale com: pip install sqlalchemy psycopg2-binary")
+    st.error("❌ SQLAlchemy não está instalado. Instale com: pip install sqlalchemy")
     st.stop()
 
-# --- CONFIGURAÇÃO PARA NUVEM ---
+# --- CONFIGURAÇÃO PARA STREAMLIT.IO ---
+# Usar st.secrets para configurações sensíveis
 try:
+    # Configuração para PostgreSQL (Neon.tech ou similar)
     POSTGRES_CONFIG = {
-        'host': st.secrets["postgres"]["host"],
-        'port': st.secrets["postgres"]["port"],
-        'database': st.secrets["postgres"]["database"],
-        'user': st.secrets["postgres"]["user"],
-        'password': st.secrets["postgres"]["password"]
+        'host': st.secrets.get("POSTGRES_HOST", ""),
+        'port': st.secrets.get("POSTGRES_PORT", "5432"),
+        'database': st.secrets.get("POSTGRES_DATABASE", ""),
+        'user': st.secrets.get("POSTGRES_USER", ""),
+        'password': st.secrets.get("POSTGRES_PASSWORD", "")
     }
     
-    logger.info(f"Conectando ao Neon.tech: {POSTGRES_CONFIG['host']}")
+    # Verificar se todas as configurações necessárias estão presentes
+    required_configs = ['host', 'database', 'user', 'password']
+    missing_configs = [config for config in required_configs if not POSTGRES_CONFIG[config]]
     
-except (KeyError, Exception) as e:
-    st.error("❌ Erro ao carregar as credenciais do banco de dados.")
-    logger.error(f"Erro nas credenciais do banco: {e}")
+    if missing_configs:
+        st.error(f"❌ Configurações do banco de dados ausentes: {', '.join(missing_configs)}")
+        st.info("💡 Configure as secrets no Streamlit Community Cloud:")
+        st.code(f"""
+# No arquivo .streamlit/secrets.toml:
+POSTGRES_HOST = "seu-host.neon.tech"
+POSTGRES_DATABASE = "seu-database"
+POSTGRES_USER = "seu-user"
+POSTGRES_PASSWORD = "sua-senha"
+POSTGRES_PORT = "5432"
+        """)
+        st.stop()
+    
+    logger.info(f"Conectando ao banco: {POSTGRES_CONFIG['host']}")
+    
+except Exception as e:
+    st.error("❌ Erro ao carregar as configurações do banco de dados.")
+    logger.error(f"Erro nas configurações do banco: {e}")
     st.stop()
 
-# Construção da URL de conexão
-POSTGRES_URL = (
-    f"postgresql+psycopg2://{POSTGRES_CONFIG['user']}:{POSTGRES_CONFIG['password']}@"
-    f"{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}?"
-    f"sslmode=require"
-)
+# Construção da URL de conexão (compatível com Streamlit.io)
+POSTGRES_URL = f"postgresql://{POSTGRES_CONFIG['user']}:{POSTGRES_CONFIG['password']}@{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
 
-# --- DatabaseManager com Tratamento de Erros Melhorado ---
+# --- DECORATOR PARA SEGURANÇA ---
+def safe_streamlit_call(func):
+    """Decorator para prevenir erros de renderização no Streamlit"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if "removeChild" in str(e) or "Node" in str(e):
+                logger.warning(f"Erro de renderização ignorado: {e}")
+                return None
+            else:
+                raise e
+    return wrapper
+
+# --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
+def clean_session_state():
+    """Limpa estados temporários da sessão para prevenir conflitos"""
+    keys_to_keep = ['authenticated', 'user', 'page_loaded', 'last_refresh']
+    keys_to_remove = [key for key in st.session_state.keys() if key not in keys_to_keep]
+    
+    for key in keys_to_remove:
+        try:
+            del st.session_state[key]
+        except:
+            pass
+
+# --- DatabaseManager Compatível com Streamlit.io ---
 class PostgresDatabaseManager:
     """Gerencia a conexão e operações com o banco de dados PostgreSQL."""
     
@@ -606,7 +649,7 @@ class PostgresDatabaseManager:
             logger.error(f"Erro ao obter dados para dashboard ({criterio}): {e}")
             return {}
 
-# --- FUNÇÕES DE INTERFACE COM TRATAMENTO DE ERROS ---
+# --- FUNÇÕES DE INTERFACE ---
 
 def sanitizar_nome_arquivo(nome):
     """Remove caracteres inválidos para nomes de arquivo."""
@@ -689,6 +732,7 @@ def extrair_cils_do_xlsx(arquivo_xlsx):
         logger.error(error_msg)
         return []
 
+@safe_streamlit_call
 def mostrar_dashboard_geral(db_manager):
     """Dashboard geral com tratamento de erros robusto."""
     try:
@@ -792,6 +836,7 @@ def mostrar_dashboard_geral(db_manager):
         st.error(f"❌ Erro no dashboard: {str(e)}")
         logger.error(f"Erro no dashboard: {e}")
 
+@safe_streamlit_call
 def mostrar_relatorio_operacional(db_manager):
     """Relatório operacional detalhado."""
     try:
@@ -802,19 +847,19 @@ def mostrar_relatorio_operacional(db_manager):
         
         with col1:
             criterios = db_manager.obter_valores_unicos('criterio')
-            filtro_criterio = st.selectbox("Filtrar por Critério:", [""] + (criterios if criterios else []), key="filtro_criterio")
+            filtro_criterio = st.selectbox("Filtrar por Critério:", [""] + (criterios if criterios else []), key="filtro_criterio_rel")
         
         with col2:
             pts = db_manager.obter_valores_unicos('pt')
-            filtro_pt = st.selectbox("Filtrar por PT:", [""] + (pts if pts else []), key="filtro_pt")
+            filtro_pt = st.selectbox("Filtrar por PT:", [""] + (pts if pts else []), key="filtro_pt_rel")
         
         with col3:
             localidades = db_manager.obter_valores_unicos('localidade')
-            filtro_localidade = st.selectbox("Filtrar por Localidade:", [""] + (localidades if localidades else []), key="filtro_localidade")
+            filtro_localidade = st.selectbox("Filtrar por Localidade:", [""] + (localidades if localidades else []), key="filtro_localidade_rel")
         
         with col4:
             estados = ["", "prog", ""]
-            filtro_estado = st.selectbox("Filtrar por Estado:", estados, key="filtro_estado")
+            filtro_estado = st.selectbox("Filtrar por Estado:", estados, key="filtro_estado_rel")
         
         # Aplicar filtros
         filtros = {}
@@ -829,7 +874,6 @@ def mostrar_relatorio_operacional(db_manager):
         
         if st.button("🔄 Gerar Relatório", type="primary", key="gerar_relatorio"):
             with st.spinner("Gerando relatório..."):
-                # Simulação - substituir pela função real quando disponível
                 try:
                     with db_manager.engine.connect() as conn:
                         base_query = "SELECT cil, pt, localidade, criterio, valor, estado FROM bd WHERE 1=1"
@@ -867,6 +911,7 @@ def mostrar_relatorio_operacional(db_manager):
         st.error(f"❌ Erro no relatório operacional: {str(e)}")
         logger.error(f"Erro no relatório operacional: {e}")
 
+@safe_streamlit_call
 def mostrar_analise_eficiencia(db_manager):
     """Análise de eficiência por PT e Localidade."""
     try:
@@ -904,6 +949,7 @@ def mostrar_analise_eficiencia(db_manager):
         st.error(f"❌ Erro na análise de eficiência: {str(e)}")
         logger.error(f"Erro na análise de eficiência: {e}")
 
+@safe_streamlit_call
 def mostrar_relatorio_usuarios(db_manager):
     """Relatório de atividade de usuários."""
     try:
@@ -935,6 +981,7 @@ def mostrar_relatorio_usuarios(db_manager):
     except Exception as e:
         st.error(f"❌ Erro ao carregar relatório de usuários: {e}")
 
+@safe_streamlit_call
 def reset_state_form(db_manager, reset_key):
     """Formulário para resetar o estado 'prog'."""
     try:
@@ -971,6 +1018,7 @@ def reset_state_form(db_manager, reset_key):
         st.error(f"❌ Erro no formulário de reset: {str(e)}")
         logger.error(f"Erro no formulário de reset: {e}")
 
+@safe_streamlit_call
 def login_page(db_manager):
     """Página de login com tratamento de erros."""
     try:
@@ -1000,6 +1048,7 @@ def login_page(db_manager):
         st.error(f"❌ Erro na página de login: {str(e)}")
         logger.error(f"Erro no login: {e}")
 
+@safe_streamlit_call
 def manager_page(db_manager):
     """Página principal após o login."""
     try:
@@ -1009,6 +1058,7 @@ def manager_page(db_manager):
         
         # Botão de Logout
         if st.sidebar.button("🚪 Sair", use_container_width=True):
+            clean_session_state()
             st.session_state['authenticated'] = False
             st.session_state['user'] = None
             logger.info(f"Logout realizado por: {user['nome']}")
@@ -1061,6 +1111,9 @@ def manager_page(db_manager):
         else:
             st.error("❌ Role de usuário não reconhecido.")
             return
+
+        # Limpar sessão antes de transições importantes
+        clean_session_state()
 
         # Navegação entre abas
         if selected_tab == "Dashboard Geral":
@@ -1344,14 +1397,31 @@ def manager_page(db_manager):
         st.error(f"❌ Erro na página principal: {str(e)}")
         logger.error(f"Erro na página principal: {e}")
 
-# --- FUNÇÃO PRINCIPAL COM TRATAMENTO GLOBAL ---
+# --- FUNÇÃO PRINCIPAL COMPATÍVEL COM STREAMLIT.IO ---
 def main():
-    """Função principal com tratamento global de exceções."""
+    """Função principal compatível com Streamlit Community Cloud."""
     try:
+        # Adicionar CSS para prevenção de conflitos
+        st.markdown("""
+            <style>
+                .stApp {
+                    min-height: 100vh;
+                }
+                .stButton>button {
+                    transition: none !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+        
         # Inicialização segura do estado
         if 'authenticated' not in st.session_state:
             st.session_state['authenticated'] = False
             st.session_state['user'] = None
+        
+        # Estados para prevenir erros de renderização
+        if 'page_loaded' not in st.session_state:
+            st.session_state.page_loaded = True
+            st.session_state.last_refresh = time.time()
         
         # Configuração do DB
         try:
@@ -1362,10 +1432,12 @@ def main():
                 with db_manager.engine.connect() as conn:
                     result = conn.execute(text("SELECT version()"))
                     version = result.scalar()
-                    st.sidebar.success("✅ Conectado ao Banco de Dados")
+                    with st.sidebar.container():
+                        st.success("✅ Conectado ao Banco de Dados")
                     
             except Exception as e:
-                st.sidebar.error("❌ Erro na conexão com o banco")
+                with st.sidebar.container():
+                    st.error("❌ Erro na conexão com o banco")
                 
         except Exception as e:
             st.error("❌ Não foi possível conectar ao banco de dados.")
@@ -1373,23 +1445,33 @@ def main():
             return
         
         # Roteamento seguro
-        if st.session_state['authenticated']:
-            manager_page(db_manager)
-        else:
-            login_page(db_manager)
+        try:
+            if st.session_state['authenticated']:
+                manager_page(db_manager)
+            else:
+                login_page(db_manager)
+        except Exception as page_error:
+            logger.error(f"Erro na renderização da página: {page_error}")
+            st.error("Erro temporário na interface. Recarregue a página.")
+            if st.button("🔄 Tentar Recarregar"):
+                st.rerun()
             
     except Exception as e:
         st.error("""
         ❌ **Erro inesperado no aplicativo**
         
         Este erro pode ser temporário. Tente:
-        - Recarregar a página (F5)
-        - Limpar o cache do navegador
+        - Recarregar a página
         - Verificar sua conexão com a internet
         
         Se o problema persistir, entre em contato com o suporte.
         """)
         logger.error(f"Erro global na aplicação: {e}")
+        
+        if st.button("🔄 Tentar Recarregar a Aplicação"):
+            st.cache_data.clear()
+            clean_session_state()
+            st.rerun()
 
 if __name__ == '__main__':
     main()
