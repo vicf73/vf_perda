@@ -8,6 +8,8 @@ import bcrypt
 import os
 import re
 import logging
+import plotly.express as px
+import plotly.graph_objects as go
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -551,7 +553,440 @@ class PostgresDatabaseManager:
             logger.error(error_msg)
             return False, 0
 
-# --- Funções de Interface Streamlit ---
+    # --- NOVOS MÉTODOS PARA RELATÓRIOS E DASHBOARDS ---
+    
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def obter_estatisticas_gerais(_self):
+        """Obtém estatísticas gerais do sistema para dashboard."""
+        try:
+            with _self.engine.connect() as conn:
+                # Estatísticas principais
+                stats_query = text("""
+                    SELECT 
+                        COUNT(*) as total_registros,
+                        COUNT(DISTINCT cil) as cils_unicos,
+                        COUNT(DISTINCT pt) as pts_unicos,
+                        COUNT(DISTINCT localidade) as localidades_unicas,
+                        COUNT(DISTINCT nib) as nibs_unicos,
+                        SUM(CASE WHEN LOWER(TRIM(estado)) = 'prog' THEN 1 ELSE 0 END) as registros_em_progresso,
+                        SUM(qtd) as total_qtd,
+                        SUM(valor) as total_valor,
+                        AVG(qtd) as media_qtd,
+                        AVG(valor) as media_valor
+                    FROM bd
+                """)
+                
+                stats_df = pd.read_sql_query(stats_query, conn)
+                
+                # Distribuição por critério
+                criterio_query = text("""
+                    SELECT 
+                        UPPER(TRIM(criterio)) as criterio,
+                        COUNT(*) as quantidade,
+                        SUM(valor) as total_valor
+                    FROM bd 
+                    WHERE criterio IS NOT NULL AND TRIM(criterio) != ''
+                    GROUP BY UPPER(TRIM(criterio))
+                    ORDER BY quantidade DESC
+                    LIMIT 10
+                """)
+                
+                criterio_df = pd.read_sql_query(criterio_query, conn)
+                
+                # Distribuição por anomalia
+                anomalia_query = text("""
+                    SELECT 
+                        UPPER(TRIM(anomalia)) as anomalia,
+                        COUNT(*) as quantidade
+                    FROM bd 
+                    WHERE anomalia IS NOT NULL AND TRIM(anomalia) != ''
+                    GROUP BY UPPER(TRIM(anomalia))
+                    ORDER BY quantidade DESC
+                    LIMIT 10
+                """)
+                
+                anomalia_df = pd.read_sql_query(anomalia_query, conn)
+                
+                return {
+                    'estatisticas_gerais': stats_df.iloc[0].to_dict() if not stats_df.empty else {},
+                    'distribuicao_criterio': criterio_df.to_dict('records'),
+                    'distribuicao_anomalia': anomalia_df.to_dict('records')
+                }
+                
+        except Exception as e:
+            logger.error(f"Erro ao obter estatísticas: {e}")
+            return {}
+    
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def obter_metricas_operacionais(_self):
+        """Obtém métricas operacionais para relatórios."""
+        try:
+            with _self.engine.connect() as conn:
+                # Eficiência por PT
+                eficiencia_pt_query = text("""
+                    SELECT 
+                        UPPER(TRIM(pt)) as pt,
+                        COUNT(*) as total_registros,
+                        SUM(CASE WHEN LOWER(TRIM(estado)) = 'prog' THEN 1 ELSE 0 END) as em_progresso,
+                        ROUND(SUM(CASE WHEN LOWER(TRIM(estado)) = 'prog' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as percentual_progresso,
+                        SUM(valor) as valor_total,
+                        AVG(valor) as valor_medio
+                    FROM bd
+                    WHERE pt IS NOT NULL AND TRIM(pt) != ''
+                    GROUP BY UPPER(TRIM(pt))
+                    HAVING COUNT(*) > 10
+                    ORDER BY total_registros DESC
+                    LIMIT 15
+                """)
+                
+                eficiencia_pt_df = pd.read_sql_query(eficiencia_pt_query, conn)
+                
+                # Top localidades por valor
+                top_localidades_query = text("""
+                    SELECT 
+                        UPPER(TRIM(localidade)) as localidade,
+                        COUNT(*) as total_registros,
+                        SUM(valor) as valor_total,
+                        AVG(valor) as valor_medio
+                    FROM bd
+                    WHERE localidade IS NOT NULL AND TRIM(localidade) != ''
+                    GROUP BY UPPER(TRIM(localidade))
+                    ORDER BY valor_total DESC
+                    LIMIT 15
+                """)
+                
+                top_localidades_df = pd.read_sql_query(top_localidades_query, conn)
+                
+                # Distribuição geográfica (com coordenadas)
+                geolocalizacao_query = text("""
+                    SELECT 
+                        lat,
+                        long,
+                        COUNT(*) as densidade,
+                        SUM(valor) as valor_total
+                    FROM bd
+                    WHERE lat IS NOT NULL AND long IS NOT NULL 
+                    AND lat != 0 AND long != 0
+                    GROUP BY lat, long
+                    HAVING COUNT(*) > 1
+                """)
+                
+                geolocalizacao_df = pd.read_sql_query(geolocalizacao_query, conn)
+                
+                return {
+                    'eficiencia_pt': eficiencia_pt_df.to_dict('records'),
+                    'top_localidades': top_localidades_df.to_dict('records'),
+                    'geolocalizacao': geolocalizacao_df.to_dict('records')
+                }
+                
+        except Exception as e:
+            logger.error(f"Erro ao obter métricas operacionais: {e}")
+            return {}
+    
+    def gerar_relatorio_detalhado(_self, filtros=None):
+        """Gera relatório detalhado com base em filtros."""
+        try:
+            with _self.engine.connect() as conn:
+                base_query = """
+                    SELECT 
+                        cil, pt, localidade, criterio, anomalia, 
+                        situacao, qtd, valor, estado, nib,
+                        desc_tp_cli, est_contr, sit_div, est_inspec
+                    FROM bd 
+                    WHERE 1=1
+                """
+                
+                params = {}
+                
+                # Aplicar filtros
+                if filtros:
+                    if filtros.get('criterio'):
+                        base_query += " AND UPPER(TRIM(criterio)) = :criterio"
+                        params['criterio'] = filtros['criterio'].upper().strip()
+                    
+                    if filtros.get('pt'):
+                        base_query += " AND UPPER(TRIM(pt)) = :pt"
+                        params['pt'] = filtros['pt'].upper().strip()
+                    
+                    if filtros.get('localidade'):
+                        base_query += " AND UPPER(TRIM(localidade)) = :localidade"
+                        params['localidade'] = filtros['localidade'].upper().strip()
+                    
+                    if filtros.get('estado'):
+                        base_query += " AND LOWER(TRIM(estado)) = :estado"
+                        params['estado'] = filtros['estado'].lower().strip()
+                
+                base_query += " ORDER BY pt, localidade, criterio"
+                
+                df = pd.read_sql_query(text(base_query), conn, params=params)
+                return df
+                
+        except Exception as e:
+            logger.error(f"Erro ao gerar relatório detalhado: {e}")
+            return pd.DataFrame()
+
+# --- FUNÇÕES PARA DASHBOARDS E RELATÓRIOS ---
+
+def mostrar_dashboard_geral(db_manager):
+    """Dashboard geral com métricas e visualizações."""
+    st.markdown("## 📊 Dashboard Geral - Métricas do Sistema")
+    
+    # Obter dados
+    with st.spinner("Carregando dados do dashboard..."):
+        estatisticas = db_manager.obter_estatisticas_gerais()
+        metricas = db_manager.obter_metricas_operacionais()
+    
+    if not estatisticas:
+        st.error("❌ Não foi possível carregar os dados do dashboard.")
+        return
+    
+    stats = estatisticas['estatisticas_gerais']
+    
+    # Métricas Principais
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            label="Total de Registros",
+            value=f"{stats.get('total_registros', 0):,}",
+            delta=None
+        )
+    
+    with col2:
+        st.metric(
+            label="CILs Únicos",
+            value=f"{stats.get('cils_unicos', 0):,}",
+            delta=None
+        )
+    
+    with col3:
+        progresso_percent = (stats.get('registros_em_progresso', 0) / max(stats.get('total_registros', 1), 1)) * 100
+        st.metric(
+            label="Em Progresso",
+            value=f"{stats.get('registros_em_progresso', 0):,}",
+            delta=f"{progresso_percent:.1f}%"
+        )
+    
+    with col4:
+        st.metric(
+            label="Valor Total",
+            value=f"R$ {stats.get('total_valor', 0):,.2f}",
+            delta=None
+        )
+    
+    st.markdown("---")
+    
+    # Gráficos e Visualizações
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        # Gráfico de Distribuição por Critério
+        if estatisticas['distribuicao_criterio']:
+            df_criterio = pd.DataFrame(estatisticas['distribuicao_criterio'])
+            fig_criterio = px.pie(
+                df_criterio, 
+                values='quantidade', 
+                names='criterio',
+                title='Distribuição por Critério',
+                hole=0.4
+            )
+            st.plotly_chart(fig_criterio, use_container_width=True)
+        else:
+            st.info("ℹ️ Sem dados de critério para exibir")
+    
+    with col_right:
+        # Gráfico de Distribuição por Anomalia
+        if estatisticas['distribuicao_anomalia']:
+            df_anomalia = pd.DataFrame(estatisticas['distribuicao_anomalia'])
+            fig_anomalia = px.bar(
+                df_anomalia,
+                x='anomalia',
+                y='quantidade',
+                title='Top Anomalias',
+                color='quantidade'
+            )
+            fig_anomalia.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_anomalia, use_container_width=True)
+        else:
+            st.info("ℹ️ Sem dados de anomalia para exibir")
+    
+    # Mapa de Calor Geográfico
+    st.markdown("### 🗺️ Densidade Geográfica")
+    if metricas.get('geolocalizacao'):
+        df_geo = pd.DataFrame(metricas['geolocalizacao'])
+        if not df_geo.empty and len(df_geo) > 1:
+            # Usar coordenadas médias como centro do mapa
+            lat_center = df_geo['lat'].mean()
+            lon_center = df_geo['long'].mean()
+            
+            fig_mapa = px.density_mapbox(
+                df_geo,
+                lat='lat',
+                lon='long',
+                z='densidade',
+                radius=20,
+                center=dict(lat=lat_center, lon=lon_center),
+                zoom=10,
+                mapbox_style="open-street-map",
+                title="Densidade de Registros por Localização"
+            )
+            st.plotly_chart(fig_mapa, use_container_width=True)
+        else:
+            st.info("ℹ️ Dados geográficos insuficientes para exibir o mapa")
+    else:
+        st.info("ℹ️ Sem dados de geolocalização disponíveis")
+
+def mostrar_relatorio_operacional(db_manager):
+    """Relatório operacional detalhado."""
+    st.markdown("## 📈 Relatório Operacional")
+    
+    # Filtros
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        criterios = db_manager.obter_valores_unicos('criterio')
+        filtro_criterio = st.selectbox("Filtrar por Critério:", [""] + (criterios if criterios else []))
+    
+    with col2:
+        pts = db_manager.obter_valores_unicos('pt')
+        filtro_pt = st.selectbox("Filtrar por PT:", [""] + (pts if pts else []))
+    
+    with col3:
+        localidades = db_manager.obter_valores_unicos('localidade')
+        filtro_localidade = st.selectbox("Filtrar por Localidade:", [""] + (localidades if localidades else []))
+    
+    with col4:
+        estados = ["", "prog", ""]
+        filtro_estado = st.selectbox("Filtrar por Estado:", estados)
+    
+    # Aplicar filtros
+    filtros = {}
+    if filtro_criterio and filtro_criterio != "":
+        filtros['criterio'] = filtro_criterio
+    if filtro_pt and filtro_pt != "":
+        filtros['pt'] = filtro_pt
+    if filtro_localidade and filtro_localidade != "":
+        filtros['localidade'] = filtro_localidade
+    if filtro_estado and filtro_estado != "":
+        filtros['estado'] = filtro_estado
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        with st.spinner("Gerando relatório..."):
+            df_relatorio = db_manager.gerar_relatorio_detalhado(filtros)
+            
+        if not df_relatorio.empty:
+            st.success(f"✅ Relatório gerado com {len(df_relatorio)} registros")
+            
+            # Métricas do relatório
+            total_valor = df_relatorio['valor'].sum()
+            media_valor = df_relatorio['valor'].mean()
+            registros_prog = len(df_relatorio[df_relatorio['estado'] == 'prog'])
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total do Relatório", f"R$ {total_valor:,.2f}")
+            col2.metric("Valor Médio", f"R$ {media_valor:,.2f}")
+            col3.metric("Em Progresso", registros_prog)
+            
+            # Tabela de dados
+            st.dataframe(df_relatorio, use_container_width=True)
+            
+            # Opção de download
+            csv = df_relatorio.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name=f"relatorio_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados")
+
+def mostrar_analise_eficiencia(db_manager):
+    """Análise de eficiência por PT e Localidade."""
+    st.markdown("## 📊 Análise de Eficiência")
+    
+    with st.spinner("Carregando métricas de eficiência..."):
+        metricas = db_manager.obter_metricas_operacionais()
+    
+    if not metricas.get('eficiencia_pt'):
+        st.info("ℹ️ Sem dados de eficiência disponíveis")
+        return
+    
+    df_eficiencia = pd.DataFrame(metricas['eficiencia_pt'])
+    
+    # Gráfico de eficiência
+    fig_eficiencia = px.bar(
+        df_eficiencia.head(10),
+        x='pt',
+        y='percentual_progresso',
+        title='Top 10 PTs por Percentual em Progresso',
+        color='percentual_progresso',
+        labels={'percentual_progresso': '% em Progresso', 'pt': 'PT'}
+    )
+    fig_eficiencia.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig_eficiencia, use_container_width=True)
+    
+    # Tabela detalhada
+    st.markdown("### 📋 Detalhamento por PT")
+    st.dataframe(
+        df_eficiencia[['pt', 'total_registros', 'em_progresso', 'percentual_progresso', 'valor_total']],
+        use_container_width=True
+    )
+    
+    # Análise por localidade
+    if metricas.get('top_localidades'):
+        st.markdown("### 🏙️ Top Localidades por Valor")
+        df_localidades = pd.DataFrame(metricas['top_localidades'])
+        
+        fig_localidades = px.treemap(
+            df_localidades.head(8),
+            path=['localidade'],
+            values='valor_total',
+            title='Distribuição de Valor por Localidade (Top 8)'
+        )
+        st.plotly_chart(fig_localidades, use_container_width=True)
+
+def mostrar_relatorio_usuarios(db_manager):
+    """Relatório de atividade de usuários."""
+    st.markdown("## 👥 Relatório de Usuários")
+    
+    try:
+        usuarios = db_manager.obter_usuarios()
+        
+        if usuarios:
+            df_usuarios = pd.DataFrame(usuarios, columns=['ID', 'Username', 'Nome', 'Role', 'Data_Criacao'])
+            
+            # Estatísticas de usuários
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total de Usuários", len(usuarios))
+            
+            admin_count = len(df_usuarios[df_usuarios['Role'] == 'Administrador'])
+            tecnico_count = len(df_usuarios[df_usuarios['Role'] == 'Técnico'])
+            assistente_count = len(df_usuarios[df_usuarios['Role'] == 'Assistente Administrativo'])
+            
+            col2.metric("Administradores", admin_count)
+            col3.metric("Técnicos/Assistentes", tecnico_count + assistente_count)
+            
+            # Gráfico de distribuição por role
+            role_count = df_usuarios['Role'].value_counts()
+            fig_roles = px.pie(
+                values=role_count.values,
+                names=role_count.index,
+                title='Distribuição de Usuários por Função'
+            )
+            st.plotly_chart(fig_roles, use_container_width=True)
+            
+            # Tabela de usuários
+            st.markdown("### 📋 Lista de Usuários")
+            st.dataframe(df_usuarios, use_container_width=True)
+            
+        else:
+            st.info("ℹ️ Nenhum usuário cadastrado no sistema")
+            
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar relatório de usuários: {e}")
+
+# --- FUNÇÕES DE INTERFACE STREAMLIT ---
 
 def sanitizar_nome_arquivo(nome):
     """Remove caracteres inválidos para nomes de arquivo."""
@@ -690,7 +1125,8 @@ def reset_state_form(db_manager, reset_key):
             else:
                 st.error(f"❌ Falha ao resetar: {resultado}")
 
-# --- Páginas do Aplicativo ---
+# --- PÁGINAS DO APLICATIVO ---
+
 def login_page(db_manager):
     """Página de login."""
     st.title("Sistema de Gestão de Dados - Login")
@@ -757,8 +1193,19 @@ def manager_page(db_manager):
     
     # --- Controle de Acesso Baseado em Role ---
     if user['role'] == 'Administrador':
-        st.header("Gerenciamento de Dados e Folhas de Trabalho")
-        tabs = ["Importação", "Geração de Folhas", "Gerenciamento de Usuários", "Reset de Estado"]
+        st.header("Gerenciamento de Dados e Relatórios")
+        
+        # NOVAS ABAS PARA ADMINISTRADOR
+        tabs = [
+            "Dashboard Geral", 
+            "Relatório Operacional", 
+            "Análise de Eficiência", 
+            "Relatório de Usuários",
+            "Importação", 
+            "Geração de Folhas", 
+            "Gerenciamento de Usuários", 
+            "Reset de Estado"
+        ]
         selected_tab = st.selectbox("Selecione a Ação:", tabs)
         
     elif user['role'] == 'Assistente Administrativo':
@@ -774,9 +1221,38 @@ def manager_page(db_manager):
         return
 
     # =========================================================================
-    # ABA 1: IMPORTAÇÃO DE CSV (APENAS ADMINISTRADOR)
+    # NOVAS ABAS DE RELATÓRIOS (APENAS ADMINISTRADOR)
     # =========================================================================
-    if selected_tab == "Importação":
+    
+    if selected_tab == "Dashboard Geral":
+        if user['role'] != 'Administrador':
+            st.error("❌ Acesso negado. Apenas Administradores podem acessar o dashboard.")
+            return
+        mostrar_dashboard_geral(db_manager)
+        
+    elif selected_tab == "Relatório Operacional":
+        if user['role'] != 'Administrador':
+            st.error("❌ Acesso negado. Apenas Administradores podem acessar relatórios.")
+            return
+        mostrar_relatorio_operacional(db_manager)
+        
+    elif selected_tab == "Análise de Eficiência":
+        if user['role'] != 'Administrador':
+            st.error("❌ Acesso negado. Apenas Administradores podem acessar análises.")
+            return
+        mostrar_analise_eficiencia(db_manager)
+        
+    elif selected_tab == "Relatório de Usuários":
+        if user['role'] != 'Administrador':
+            st.error("❌ Acesso negado. Apenas Administradores podem acessar relatórios de usuários.")
+            return
+        mostrar_relatorio_usuarios(db_manager)
+        
+    # =========================================================================
+    # ABAS ORIGINAIS (MANTIDAS)
+    # =========================================================================
+    
+    elif selected_tab == "Importação":
         if user['role'] != 'Administrador':
             st.error("❌ Acesso negado. Apenas Administradores podem importar dados.")
             return
@@ -795,9 +1271,6 @@ def manager_page(db_manager):
                     else:
                         st.error("Falha na importação. Verifique o formato do arquivo e o console para detalhes.")
                         
-    # =========================================================================
-    # ABA 2: GERAÇÃO DE FOLHAS (TODOS OS USUÁRIOS)
-    # =========================================================================
     elif selected_tab == "Geração de Folhas":
         st.markdown("### 📝 Geração de Folhas de Trabalho")
 
@@ -960,9 +1433,6 @@ def manager_page(db_manager):
                     else:
                         st.warning("⚠️ Nenhuma folha gerada. Verifique se existem registros que atendam ao critério selecionado para o valor escolhido.")
 
-    # =========================================================================
-    # ABA 3: GERENCIAMENTO DE USUÁRIOS (APENAS ADMINISTRADOR)
-    # =========================================================================
     elif selected_tab == "Gerenciamento de Usuários":
         if user['role'] != 'Administrador':
             st.error("❌ Acesso negado. Apenas Administradores podem gerenciar usuários.")
@@ -1071,9 +1541,6 @@ def manager_page(db_manager):
         else:
             st.info("Nenhum usuário encontrado no banco de dados.")
 
-    # =========================================================================
-    # ABA 4: RESET DE ESTADO (APENAS ADMINISTRADOR)
-    # =========================================================================
     elif selected_tab == "Reset de Estado":
         if user['role'] != 'Administrador':
             st.error("❌ Acesso negado. Apenas Administradores podem resetar o estado.")
@@ -1081,7 +1548,7 @@ def manager_page(db_manager):
 
         reset_state_form(db_manager, "main")
 
-# --- Função Principal ---
+# --- FUNÇÃO PRINCIPAL ---
 def main():
     """Função principal do aplicativo Streamlit."""
     st.set_page_config(
