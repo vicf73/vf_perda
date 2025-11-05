@@ -8,10 +8,17 @@ import bcrypt
 import os
 import re
 import logging
-import plotly.express as px
-import plotly.graph_objects as go
 from io import BytesIO
 from zipfile import ZipFile
+
+# Tentar importar Plotly com fallback
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("⚠️ Plotly não está instalado. Alguns gráficos não estarão disponíveis. Instale com: pip install plotly")
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -731,6 +738,22 @@ def mostrar_dashboard_geral(db_manager):
     """Dashboard geral com métricas e visualizações."""
     st.markdown("## 📊 Dashboard Geral - Métricas do Sistema")
     
+    if not PLOTLY_AVAILABLE:
+        st.error("""
+        ❌ **Plotly não está disponível**
+        
+        Para visualizar os gráficos, instale o Plotly:
+        ```bash
+        pip install plotly
+        ```
+        
+        Ou adicione ao arquivo `requirements.txt`:
+        ```txt
+        plotly>=5.0.0
+        ```
+        """)
+        return
+    
     # Obter dados
     with st.spinner("Carregando dados do dashboard..."):
         estatisticas = db_manager.obter_estatisticas_gerais()
@@ -783,14 +806,19 @@ def mostrar_dashboard_geral(db_manager):
         # Gráfico de Distribuição por Critério
         if estatisticas['distribuicao_criterio']:
             df_criterio = pd.DataFrame(estatisticas['distribuicao_criterio'])
-            fig_criterio = px.pie(
-                df_criterio, 
-                values='quantidade', 
-                names='criterio',
-                title='Distribuição por Critério',
-                hole=0.4
-            )
-            st.plotly_chart(fig_criterio, use_container_width=True)
+            try:
+                fig_criterio = px.pie(
+                    df_criterio, 
+                    values='quantidade', 
+                    names='criterio',
+                    title='Distribuição por Critério',
+                    hole=0.4
+                )
+                st.plotly_chart(fig_criterio, use_container_width=True)
+            except Exception as e:
+                st.error(f"Erro ao criar gráfico de critério: {e}")
+                # Fallback: mostrar tabela
+                st.dataframe(df_criterio, use_container_width=True)
         else:
             st.info("ℹ️ Sem dados de critério para exibir")
     
@@ -798,15 +826,20 @@ def mostrar_dashboard_geral(db_manager):
         # Gráfico de Distribuição por Anomalia
         if estatisticas['distribuicao_anomalia']:
             df_anomalia = pd.DataFrame(estatisticas['distribuicao_anomalia'])
-            fig_anomalia = px.bar(
-                df_anomalia,
-                x='anomalia',
-                y='quantidade',
-                title='Top Anomalias',
-                color='quantidade'
-            )
-            fig_anomalia.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_anomalia, use_container_width=True)
+            try:
+                fig_anomalia = px.bar(
+                    df_anomalia,
+                    x='anomalia',
+                    y='quantidade',
+                    title='Top Anomalias',
+                    color='quantidade'
+                )
+                fig_anomalia.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_anomalia, use_container_width=True)
+            except Exception as e:
+                st.error(f"Erro ao criar gráfico de anomalia: {e}")
+                # Fallback: mostrar tabela
+                st.dataframe(df_anomalia, use_container_width=True)
         else:
             st.info("ℹ️ Sem dados de anomalia para exibir")
     
@@ -815,22 +848,27 @@ def mostrar_dashboard_geral(db_manager):
     if metricas.get('geolocalizacao'):
         df_geo = pd.DataFrame(metricas['geolocalizacao'])
         if not df_geo.empty and len(df_geo) > 1:
-            # Usar coordenadas médias como centro do mapa
-            lat_center = df_geo['lat'].mean()
-            lon_center = df_geo['long'].mean()
-            
-            fig_mapa = px.density_mapbox(
-                df_geo,
-                lat='lat',
-                lon='long',
-                z='densidade',
-                radius=20,
-                center=dict(lat=lat_center, lon=lon_center),
-                zoom=10,
-                mapbox_style="open-street-map",
-                title="Densidade de Registros por Localização"
-            )
-            st.plotly_chart(fig_mapa, use_container_width=True)
+            try:
+                # Usar coordenadas médias como centro do mapa
+                lat_center = df_geo['lat'].mean()
+                lon_center = df_geo['long'].mean()
+                
+                fig_mapa = px.density_mapbox(
+                    df_geo,
+                    lat='lat',
+                    lon='long',
+                    z='densidade',
+                    radius=20,
+                    center=dict(lat=lat_center, lon=lon_center),
+                    zoom=10,
+                    mapbox_style="open-street-map",
+                    title="Densidade de Registros por Localização"
+                )
+                st.plotly_chart(fig_mapa, use_container_width=True)
+            except Exception as e:
+                st.error(f"Erro ao criar mapa: {e}")
+                st.info("📍 **Dados de localização disponíveis:**")
+                st.dataframe(df_geo[['lat', 'long', 'densidade']].head(10), use_container_width=True)
         else:
             st.info("ℹ️ Dados geográficos insuficientes para exibir o mapa")
     else:
@@ -905,6 +943,17 @@ def mostrar_analise_eficiencia(db_manager):
     """Análise de eficiência por PT e Localidade."""
     st.markdown("## 📊 Análise de Eficiência")
     
+    if not PLOTLY_AVAILABLE:
+        st.error("Plotly necessário para visualizações gráficas. Instale com: pip install plotly")
+        # Mostrar apenas tabelas
+        with st.spinner("Carregando métricas de eficiência..."):
+            metricas = db_manager.obter_metricas_operacionais()
+        
+        if metricas.get('eficiencia_pt'):
+            df_eficiencia = pd.DataFrame(metricas['eficiencia_pt'])
+            st.dataframe(df_eficiencia, use_container_width=True)
+        return
+    
     with st.spinner("Carregando métricas de eficiência..."):
         metricas = db_manager.obter_metricas_operacionais()
     
@@ -915,16 +964,19 @@ def mostrar_analise_eficiencia(db_manager):
     df_eficiencia = pd.DataFrame(metricas['eficiencia_pt'])
     
     # Gráfico de eficiência
-    fig_eficiencia = px.bar(
-        df_eficiencia.head(10),
-        x='pt',
-        y='percentual_progresso',
-        title='Top 10 PTs por Percentual em Progresso',
-        color='percentual_progresso',
-        labels={'percentual_progresso': '% em Progresso', 'pt': 'PT'}
-    )
-    fig_eficiencia.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig_eficiencia, use_container_width=True)
+    try:
+        fig_eficiencia = px.bar(
+            df_eficiencia.head(10),
+            x='pt',
+            y='percentual_progresso',
+            title='Top 10 PTs por Percentual em Progresso',
+            color='percentual_progresso',
+            labels={'percentual_progresso': '% em Progresso', 'pt': 'PT'}
+        )
+        fig_eficiencia.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_eficiencia, use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao criar gráfico de eficiência: {e}")
     
     # Tabela detalhada
     st.markdown("### 📋 Detalhamento por PT")
@@ -938,17 +990,24 @@ def mostrar_analise_eficiencia(db_manager):
         st.markdown("### 🏙️ Top Localidades por Valor")
         df_localidades = pd.DataFrame(metricas['top_localidades'])
         
-        fig_localidades = px.treemap(
-            df_localidades.head(8),
-            path=['localidade'],
-            values='valor_total',
-            title='Distribuição de Valor por Localidade (Top 8)'
-        )
-        st.plotly_chart(fig_localidades, use_container_width=True)
+        try:
+            fig_localidades = px.treemap(
+                df_localidades.head(8),
+                path=['localidade'],
+                values='valor_total',
+                title='Distribuição de Valor por Localidade (Top 8)'
+            )
+            st.plotly_chart(fig_localidades, use_container_width=True)
+        except Exception as e:
+            st.error(f"Erro ao criar treemap: {e}")
+            st.dataframe(df_localidades, use_container_width=True)
 
 def mostrar_relatorio_usuarios(db_manager):
     """Relatório de atividade de usuários."""
     st.markdown("## 👥 Relatório de Usuários")
+    
+    if not PLOTLY_AVAILABLE:
+        st.warning("Gráficos de usuários não disponíveis sem Plotly")
     
     try:
         usuarios = db_manager.obter_usuarios()
@@ -968,13 +1027,17 @@ def mostrar_relatorio_usuarios(db_manager):
             col3.metric("Técnicos/Assistentes", tecnico_count + assistente_count)
             
             # Gráfico de distribuição por role
-            role_count = df_usuarios['Role'].value_counts()
-            fig_roles = px.pie(
-                values=role_count.values,
-                names=role_count.index,
-                title='Distribuição de Usuários por Função'
-            )
-            st.plotly_chart(fig_roles, use_container_width=True)
+            if PLOTLY_AVAILABLE:
+                try:
+                    role_count = df_usuarios['Role'].value_counts()
+                    fig_roles = px.pie(
+                        values=role_count.values,
+                        names=role_count.index,
+                        title='Distribuição de Usuários por Função'
+                    )
+                    st.plotly_chart(fig_roles, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Erro ao criar gráfico de roles: {e}")
             
             # Tabela de usuários
             st.markdown("### 📋 Lista de Usuários")
