@@ -1186,7 +1186,8 @@ def manager_page(db_manager):
                 # Obter valores únicos
                 valor_criterio_selecionado = None
                 if criterio_selecionado:
-                    valores_criterio = db_manager.obter_valores_unicos(criterio_selecionado.lower())
+                    coluna_bd = db_manager.MAPEAMENTO_CRITERIOS.get(criterio_selecionado)
+                    valores_criterio = db_manager.obter_valores_unicos(coluna_bd)
                     
                     if criterio_selecionado == "Criterio":
                         if "SUSP" in valores_criterio:
