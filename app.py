@@ -1172,7 +1172,7 @@ def manager_page(db_manager):
                         except Exception as e:
                             st.error(f"❌ Erro ao processar arquivo: {e}")
 
-                
+            
                 # Seleção de Critério
                 st.markdown("### 🔍 Critério de Seleção")
 
@@ -1189,33 +1189,31 @@ def manager_page(db_manager):
                 if criterio_selecionado:
                     # CORREÇÃO: Usar o mapeamento correto para buscar valores
                     coluna_bd = db_manager.MAPEAMENTO_CRITERIOS.get(criterio_selecionado)
-                    valores_criterio = db_manager.obter_valores_unicos(coluna_bd)
                     
-                    if criterio_selecionado == "Criterio":
-                        if valores_criterio and "SUSP" in valores_criterio:
-                            valor_criterio_selecionado = "SUSP"
-                            st.info(f"🔍 **Critério selecionado:** {criterio_selecionado} = '{valor_criterio_selecionado}'")
-                        else:
-                            # Se SUSP não existe, mostrar dropdown
-                            if valores_criterio:
-                                valor_criterio_selecionado = st.selectbox(
-                                    f"Selecione o valor para **{criterio_selecionado}**:",
-                                    valores_criterio,
-                                    key="criterio_valor"
-                                )
-                            else:
-                                st.warning(f"ℹ️ Nenhum valor encontrado para {criterio_selecionado}.")
-                    else:
-                        # Para outros critérios, sempre mostrar dropdown
+                    if coluna_bd:
+                        valores_criterio = db_manager.obter_valores_unicos(coluna_bd)
+                        
+                        # SEMPRE mostrar dropdown para TODOS os critérios
                         if valores_criterio:
+                            # Adicionar opção vazia no início
+                            opcoes = [""] + sorted(valores_criterio)
                             valor_criterio_selecionado = st.selectbox(
                                 f"Selecione o valor para **{criterio_selecionado}**:",
-                                valores_criterio,
+                                opcoes,
                                 key=f"criterio_valor_{criterio_selecionado}"
                             )
+                            
+                            # Mostrar estatística
+                            if valor_criterio_selecionado:
+                                st.success(f"✅ **{criterio_selecionado} selecionado:** {valor_criterio_selecionado}")
+                            else:
+                                st.warning("⚠️ Selecione um valor para o critério")
                         else:
-                            st.warning(f"ℹ️ Nenhum valor encontrado para {criterio_selecionado}.")
-                
+                            st.error(f"❌ Nenhum valor encontrado para {criterio_selecionado} na coluna {coluna_bd}")
+                    else:
+                        st.error(f"❌ Erro: Critério {criterio_selecionado} não mapeado")
+
+
                 # Parâmetros de Geração
                 col1, col2 = st.columns(2)
                 with col1:
