@@ -1172,6 +1172,7 @@ def manager_page(db_manager):
                         except Exception as e:
                             st.error(f"❌ Erro ao processar arquivo: {e}")
 
+                
                 # Seleção de Critério
                 st.markdown("### 🔍 Critério de Seleção")
 
@@ -1186,25 +1187,32 @@ def manager_page(db_manager):
                 # Obter valores únicos
                 valor_criterio_selecionado = None
                 if criterio_selecionado:
+                    # CORREÇÃO: Usar o mapeamento correto para buscar valores
                     coluna_bd = db_manager.MAPEAMENTO_CRITERIOS.get(criterio_selecionado)
                     valores_criterio = db_manager.obter_valores_unicos(coluna_bd)
                     
                     if criterio_selecionado == "Criterio":
-                        if "SUSP" in valores_criterio:
+                        if valores_criterio and "SUSP" in valores_criterio:
                             valor_criterio_selecionado = "SUSP"
                             st.info(f"🔍 **Critério selecionado:** {criterio_selecionado} = '{valor_criterio_selecionado}'")
                         else:
-                            st.error("❌ Critério 'SUSP' não encontrado no banco de dados.")
+                            # Se SUSP não existe, mostrar dropdown
+                            if valores_criterio:
+                                valor_criterio_selecionado = st.selectbox(
+                                    f"Selecione o valor para **{criterio_selecionado}**:",
+                                    valores_criterio,
+                                    key="criterio_valor"
+                                )
+                            else:
+                                st.warning(f"ℹ️ Nenhum valor encontrado para {criterio_selecionado}.")
                     else:
+                        # Para outros critérios, sempre mostrar dropdown
                         if valores_criterio:
-                            valores_criterio.insert(0, "Selecione...")
                             valor_criterio_selecionado = st.selectbox(
                                 f"Selecione o valor para **{criterio_selecionado}**:",
                                 valores_criterio,
-                                key="criterio_valor"
+                                key=f"criterio_valor_{criterio_selecionado}"
                             )
-                            if valor_criterio_selecionado == "Selecione...":
-                                valor_criterio_selecionado = None
                         else:
                             st.warning(f"ℹ️ Nenhum valor encontrado para {criterio_selecionado}.")
                 
