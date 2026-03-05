@@ -255,7 +255,7 @@ def manager_page(db_manager):
         if tipo_selecionado != "AVULSO":
             st.markdown("### 🔍 Critério de Seleção")
             
-            criterio_opcoes = ["Criterio", "Anomalia", "DESC_TP_CLI", "EST_CTR", "sit_div", "desv", "est_inspec"]
+            criterio_opcoes = ["Criterio", "Anomalia", "DESC_TP_CLI", "EST_CTR"]
             criterio_selecionado = st.radio(
                 "Selecione o tipo de critério:",
                 criterio_opcoes,

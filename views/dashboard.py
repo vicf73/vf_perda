@@ -32,10 +32,7 @@ def mostrar_dashboard_geral(db_manager):
     criterios_dashboard = [
         "Criterio", 
         "Anomalia", 
-        "EST_CTR", 
-        "sit_div", 
-        "est_inspec",
-        "desv"
+        "EST_CTR"
     ]
     
     col1, col2 = st.columns(2)
