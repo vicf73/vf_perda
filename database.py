@@ -37,20 +37,14 @@ class PostgresDatabaseManager:
         'est_ctr': 'est_contr',
         'desc_tp_cli': 'desc_tp_cli',
         'criterio': 'criterio',
-        'anomalia': 'anomalia',
-        'sit_div': 'sit_div',
-        'est_inspec': 'est_inspec',
-        'desv': 'desv'
+        'anomalia': 'anomalia'
     }
     
     MAPEAMENTO_CRITERIOS = {
         "Criterio": "criterio",
         "Anomalia": "anomalia", 
         "DESC_TP_CLI": "desc_tp_cli",
-        "EST_CTR": "est_contr",
-        "sit_div": "sit_div",
-        "desv": "desv",
-        "est_inspec": "est_inspec" 
+        "EST_CTR": "est_contr"
     }
     
     def __init__(self, database_url):
@@ -825,10 +819,7 @@ class PostgresDatabaseManager:
                 mapeamento_colunas = {
                     'Criterio': 'criterio',
                     'Anomalia': 'anomalia',
-                    'EST_CTR': 'est_contr',
-                    'sit_div': 'sit_div', 
-                    'est_inspec': 'est_inspec',
-                    'desv': 'desv'
+                    'EST_CTR': 'est_contr'
                 }
                 
                 coluna_sql = mapeamento_colunas.get(criterio, criterio.lower())
